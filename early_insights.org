@@ -1,0 +1,15 @@
+#+TITLE: Chapter 1. Gaining Early Insights from Textual Data
+
+* Libaries
+
+#+BEGIN_SRC python
+import pandas as pd
+#+END_SRC
+
+* Read the Data
+
+#+BEGIN_SRC python
+un = pd.read_csv("data/un-debates.csv")
+
+print(un)
+#+END_SRC

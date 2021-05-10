@@ -29,7 +29,7 @@ We will perform the following steps:
 
 #+BEGIN_SRC python
 # print column names
-print(un.columns)
+print(un.columns.tolist())
 
 # print column data types
 print(un.dtypes)
@@ -84,6 +84,17 @@ plt.subplot(1, 2, 2)
 un["length"].plot(kind = "hist", bins = 30)
 plt.title("Speech Length (Characters)")
 plt.show()
+
+
+def gen_dist_plot(column_name):
+    plt.close()
+    # plot a single distribution plot
+    sns.displot(un[column_name], kind = "kde")
+    sns.rugplot(un[column_name])
+    plt.title(column_name.title())
+    plt.show()
+
+gen_dist_plot("length")
 #+END_SRC
 
 ** Comparing Value Distributions Across Categories
@@ -109,3 +120,31 @@ plt.subplot(1, 2, 2)
 un.groupby("year").agg({"length": "mean"}).plot(title = "Avg Speech Length", ylim = (0, 30000))
 plt.show()
 #+END_SRC
+
+#+BEGIN_SRC python :tangle ch1/overview.py
+class Overview:
+    def __init__(self, df):
+        self.df = df
+
+    def summary_stats(self, mem_usage = "deep"):
+        """
+        Returns a dictionary containing the following summary stats:
+
+        - col names: df.dtype
+        - data types + memory consumption: df.info
+          - set mem_usage to "" if you don't want to spend more time on "deeper" memory estimates
+        - summary: df.describe
+        """
+        return {
+            "col_names": self.df.columns(),
+            "data_types": self.df.info(memory_usage = mem_usage),
+            "summary": self.df.describe()
+        }
+
+un_overview = Overview(un)
+
+print(un_overview.summary_stats())
+
+#+END_SRC
+
+* Blueprint: Building a Simple Text Preprocessing Pipeline

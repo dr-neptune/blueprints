@@ -1,9 +1,12 @@
 #+TITLE: Chapter 1. Gaining Early Insights from Textual Data
+#+PROPERTY: header-args :tangle insights.py
 
 * Libaries
 
 #+BEGIN_SRC python
 import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
 #+END_SRC
 
 * Read the Data
@@ -12,4 +15,97 @@ import pandas as pd
 un = pd.read_csv("data/un-debates.csv")
 
 print(un)
+#+END_SRC
+
+* Blueprint: Getting an Overview of the Data with Pandas
+
+We will perform the following steps:
+
+1. Calculate summary statistics
+2. Check for missing values
+3. Plot distributions of interesting attributes
+4. Compare distributions across categories
+5. Visualize developments over time
+
+#+BEGIN_SRC python
+# print column names
+print(un.columns)
+
+# print column data types
+print(un.dtypes)
+
+# data types plus memory consumption
+print(un.info())
+
+# summary statistics
+print(un.describe())
+
+# summary statistics for all columns (including categorical)
+print(un.describe())
+#+END_SRC
+
+** Calculating Summary Statistics for Columns
+
+Let's add a new numerical column to the dataframe containing the text length to get some additional information about the distribution of the lengths of the speeches.
+
+#+BEGIN_SRC python
+# add text length column and describe it
+un = un.assign(length = un["text"].str.len())
+
+print(un.assign(length=un["text"].str.len()).describe().T)
+print(un.assign(length=un["text"].str.len()).describe(include="O").T)
+
+# check number of unique values for categorical predictors
+print(un[["country", "speaker"]].describe(include="O").T)
+#+END_SRC
+
+** Checking for Missing Data
+
+#+BEGIN_SRC python
+# check how many NA values we have
+print(un.isna().sum())
+
+# fill in the NA with "unknown"
+# warning: this is a mutable operation
+print(un["speaker"].fillna("unknown", inplace = True))
+print(un.isna().sum())
+
+# check specific values and their counts
+print(un[un["speaker"].str.contains("Bush")]["speaker"].value_counts())
+#+END_SRC
+
+** Plotting Value Distributions
+
+#+BEGIN_SRC python
+# plot a box and whisker plot and a histogram side by side
+plt.subplot(1, 2, 1)
+un["length"].plot(kind = "box", vert = False)
+plt.subplot(1, 2, 2)
+un["length"].plot(kind = "hist", bins = 30)
+plt.title("Speech Length (Characters)")
+plt.show()
+#+END_SRC
+
+** Comparing Value Distributions Across Categories
+
+A nice visualization to compare distributions across different categories is Seaborn's catplot
+
+#+BEGIN_SRC python
+where = un["country"].isin(["USA", "FRA", "GBR", "CHN", "RUS"])
+
+print(un[where])
+
+sns.catplot(data = un[where], x="country", y="length", kind="box")
+sns.catplot(data = un[where], x="country", y="length", kind="violin")
+plt.show()
+#+END_SRC
+
+** Visualizing Developments Over Time
+
+#+BEGIN_SRC python
+plt.subplot(1, 2, 1)
+un.groupby("year").size().plot(title = "Number of Countries")
+plt.subplot(1, 2, 2)
+un.groupby("year").agg({"length": "mean"}).plot(title = "Avg Speech Length", ylim = (0, 30000))
+plt.show()
 #+END_SRC

@@ -77,15 +77,28 @@ class UnivariatePlot:
         else:
             self.df = df[column_name].dropna().to_frame()
 
-    def gen_dist_plot(self):
+    # def gen_dist_plot(self):
+    #     """
+    #     Generates a univariate density plot for the given column name. Requires a numeric or datetime column
+    #     """
+    #     plt.close()
+    #     # plot a single distribution plot
+    #     sns.displot(data=self.df, kind="kde")
+    #     sns.rugplot(data=self.df)
+    #     plt.title(self.column_name.title())
+    #     plt.show()
+
+    def gen_dist_plot_double(self):
         """
-        Generates a univariate density plot for the given column name. Requires a numeric or datetime column
+        Generates a pair of plots:
+        - a box and whisker plot on the left
+        - a histogram on the right
         """
-        plt.close()
-        # plot a single distribution plot
-        sns.displot(data=self.df, kind="kde")
-        sns.rugplot(data=self.df)
-        plt.title(self.column_name.title())
+        plt.subplot(1, 2, 1)
+        self.df[self.column_name].plot(kind="box", vert=False)
+        plt.title("Speech Length (Characters)")
+        plt.subplot(1, 2, 2)
+        self.df[self.column_name].plot(kind="hist", bins=30)
         plt.show()
 
     def gen_count_plot(self, top_n=10):
@@ -112,7 +125,8 @@ class UnivariatePlot:
             raise ValueError("Column type not in [object, int64, datetime, float]")
 
 
-# un_len = UnivariatePlot(un, "text")
+# un_len = UnivariatePlot(un, "length")
 # un_position = UnivariatePlot(df=un, column_name="country")
 # un_position.gen_plot()
 # un_len.gen_plot()
+# un_len.gen_dist_plot_double()

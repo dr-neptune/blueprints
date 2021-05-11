@@ -93,13 +93,45 @@ class TextPreprocessor:
         but I also twiddled things and didn't do any testing
         """
 
-        def compute_idf(min_df=min_df):
-            # create data frame and compute idf
-            self.freq_df["idf"] = (
-                np.log(len(self.df) / self.freq_df.query("freq > @min_df")["freq"])
-                + 0.1
-            )
-            return self.freq_df
+        def compute_idf(min_df=2):
+            def update(doc):
+                counter.update(set(doc))
+
+            # count tokens
+            counter = Counter()
+            self.df["tokens"].map(update)
+
+            # create a df and compute idf
+            idf_df = pd.DataFrame.from_dict(
+                counter, orient="index", columns=["df"]
+            ).query("df >= @min_df")
+
+            idf_df["idf"] = np.log(len(self.df) / idf_df["df"]) + 0.1
+            idf_df.index.name = "token"
+            return idf_df
+
+        # def update(doc):
+        #     tokens = doc if preprocess is None else
+        #     preprocess(doc)
+        #     counter.update(set(tokens))
+        # # count tokens
+        # counter = Counter()
+        # df[column].map(update)
+        # # create DataFrame and compute idf
+        # idf_df = pd.DataFrame.from_dict(counter, orient='index',
+        #                                 columns=['df'])
+        # idf_df = idf_df.query('df >= @min_df')
+        # idf_df['idf'] = np.log(len(df)/idf_df['df'])+0.1
+        # idf_df.index.name = 'token'
+        # return idf_df
+
+        # def compute_idf(min_df=min_df):
+        #     # create data frame and compute idf
+        #     self.freq_df["idf"] = (
+        #         np.log(len(self.df) / self.freq_df.query("freq > @min_df")["freq"])
+        #         + 0.1
+        #     )
+        #     return self.freq_df
 
         tf_idf = self.freq_df["freq"] * compute_idf()["idf"]
 
@@ -109,7 +141,8 @@ class TextPreprocessor:
         return tf_idf.fillna(0.001)
 
 
-un_prep = TextPreprocessor(un)
+un_prep = TextPreprocessor(un[un["year"] == 1970])
+
 
 # print(un := un_prep.prep("text"))
 
@@ -193,11 +226,11 @@ class TextPlot(TextPreprocessor):
             print("Please try type = 'freq' or type = 'tf_idf'")
 
 
-# un_plots = TextPlot(un[(un["year"] == 1970) & (un["country"] == "USA")])
+un_plots = TextPlot(un[un["year"] == 2015])
 
-# un_plots.freq_plot(top_n=50)
+un_plots.freq_plot(top_n=20)
 
-# un_plots.wordcloud(p_type="tf_idf")
+un_plots.wordcloud(p_type="tf_idf")
 
 # # print(un_plots.freq_df.index)
 

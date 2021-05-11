@@ -295,7 +295,7 @@ stopwords -= exclude_stopwords
 ** Processing a Pipeline with One Line of Code
 
 #+BEGIN_SRC python
-from toolz import compose
+from toolz import compose, partial
 
 pipeline = [str.lower, tokenize, remove_stopwords]
 
@@ -305,9 +305,10 @@ def prepare(text, pipeline):
     return compose(*pipeline[::-1])(text)
 
 # applying prepare to a dataframe
-un = un.assign(tokens = un["text"].apply(prepare, pipeline = pipeline))
+un = un.assign(tokens = un["text"].apply(prepare, pipeline = pipeline),
+               num_tokens = un["tokens"].map(len))
 
-print(un[["text", "tokens"]])
+print(un[["text", "tokens", "num_tokens"]])
 #+END_SRC
 
 *** Pandas Higher Order Functions
@@ -318,3 +319,188 @@ print(un[["text", "tokens"]])
 | Series.apply | Same as map but allows additional params                  |
 | df.applymap  | rowwise map on a dataframe                                |
 | df.apply     | works on rows or columns of a df and supports aggregation |
+
+There is also the pandarallel package for performing operations on data frames in parallel
+
+#+BEGIN_SRC python
+from pandarallel import pandarallel
+import math
+
+pandarallel.initialize(progress_bar=True, verbose=2)
+
+df_size = int(5e6)
+df = pd.DataFrame({"a": np.random.randint(1, 8, df_size), "b": np.random.rand(df_size)})
+
+# df.apply
+res_parallel = df.parallel_apply(
+    lambda x: math.sin(x.a ** 2) + math.sin(x.b ** 2), axis=1
+)
+print(res_parallel)
+
+# series.map
+df_size = int(1e7)
+df = pd.DataFrame(dict(a=np.random.randint(1, 8, df_size), b=np.random.rand(df_size)))
+
+def func(x):
+    return math.sin(x ** 2) - math.cos(x ** 2)
+
+df = df.assign(results = df["a"].parallel_map(func))
+
+print(df)
+#+END_SRC
+
+* Blueprint: Counting Words with a Counter
+
+#+BEGIN_SRC python
+from collections import Counter
+
+tokens = tokenize("She likes my cats and my cats like my sofa")
+
+print(counter := Counter(tokens))
+
+# update the counter
+more_tokens = tokenize("She likes dogs and cats.")
+counter.update(more_tokens)
+print(counter)
+
+# get the counts of all the tokens in the df
+counter = Counter()
+
+un["tokens"].map(counter.update)
+
+print(counter.most_common(5))
+
+# make the counter into a dataframe
+def count_words(df, column = "tokens", preprocess = None, min_freq = 2):
+    # process tokens and update counter
+    def update(doc):
+        tokens = doc if preprocess is None else preprocess(doc)
+        counter.update(tokens)
+
+    # create a counter and run through all data
+    counter = Counter()
+    df[column].map(update)
+
+    # transform counter into a DataFrame
+    freq_df = pd.DataFrame.from_dict(counter, orient = "index", columns = ["freq"]).query("freq >= @min_freq")
+    freq_df.index.name = "token"
+
+    return freq_df.sort_values("freq", ascending = False)
+
+print(count_words(un).head(10))
+
+print(count_words(un, column = "text", preprocess = partial(prepare, pipeline = pipeline)))
+#+END_SRC
+
+TextPreprocessor
+- lower
+- tokenize
+- remove_stop
+- get_word_frequencies
+- get_word_tfidf
+- frequency_plot
+- word_cloud
+
+
+
+* Blueprint: Creating a Frequency Diagram
+
+#+BEGIN_SRC python
+freq_df = count_words(un)
+
+ax = freq_df.head(15).plot(kind = "barh", width = 0.95)
+ax.invert_yaxis()
+ax.set(xlabel = "Frequency", ylabel = "Token", title = "Top Words")
+plt.show()
+#+END_SRC
+
+* Blueprint: Creating Word Clouds
+
+#+BEGIN_SRC python
+from wordcloud import WordCloud
+
+# for one text
+text = un.query("year == 2015 and country == 'USA'")["text"].values[0]
+
+wc = WordCloud(max_words = 100, stopwords = stopwords)
+wc.generate(text)
+plt.imshow(wc, interpolation = "bilinear")
+plt.axis("off")
+plt.show()
+
+def wordcloud(word_freq, title = None, max_words = 100, stopwords = None):
+    # create word cloud
+    wc = WordCloud(width = 800, height = 400, background_color = "white", colormap = "Paired", max_font_size = 150, max_words = max_words)
+
+    # convert DF to dict
+    if type(word_freq) == pd.Series:
+        counter = Counter(word_freq.fillna(0).to_dict())
+    else:
+        counter = word_freq
+
+    # filter stop words in frequency counter
+    if stopwords is not None:
+        counter = {token:freq for (token, freq) in counter.items() if token not in stopwords}
+
+    plt.close()
+    wc.generate_from_frequencies(counter)
+    plt.title(title)
+    plt.imshow(wc, interpolation = "bilinear")
+    plt.axis("off")
+    plt.show()
+
+freq_2015_df = count_words(un.query("year == 2015"))
+
+plt.figure()
+wordcloud(freq_2015_df["freq"], max_words = 100)
+wordcloud(freq_2015_df["freq"], max_words = 100, stopwords = freq_df.head(50).index)
+plt.show()
+#+END_SRC
+
+* Blueprint: Ranking with TF-IDF
+
+#+BEGIN_SRC python
+def compute_idf(df, column = "tokens", preprocess = None, min_df = 2):
+    def update(doc):
+        tokens = doc if preprocess is None else preprocess(doc)
+        counter.update(set(tokens))
+
+    # count tokens
+    counter = Counter()
+    df[column].map(counter.update)
+
+    # create data frame and compute idf
+    idf_df = pd.DataFrame.from_dict(counter, orient = "index", columns = ["df"])
+    idf_df["idf"] = np.log(len(df) / idf_df["df"]) + 0.1
+    idf_df.index.name = "token"
+    return idf_df
+
+idf_df = compute_idf(un)
+
+def attach_tfidf(df, idf_df = idf_df):
+    return df.assign(tf_idf = df["freq"] * idf_df["idf"])
+
+
+print(idf_df)
+
+# get tf idf
+freq_df["tfidf"] = freq_df["freq"] * idf_df["idf"]
+
+print(freq_df)
+
+# try out some word clouds with tf idf weighting
+freq_1970 = attach_tfidf(count_words(un.query("year == 1970")))
+freq_2015 = attach_tfidf(count_words(un.query("year == 2015")))
+
+print(freq_1970)
+print(freq_2015)
+
+wordcloud(freq_1970["freq"], title = "1970 - TF",
+          stopwords = ["twenty-fifth", "twenty-five"])
+wordcloud(freq_2015["freq"], title = "2015 - TF",
+          stopwords = ["seventieth"])
+wordcloud(freq_1970["tf_idf"], title = "1970 - TF-IDF",
+          stopwords = ["twenty-fifth", "twenty-five"])
+wordcloud(freq_2015["tf_idf"], title = "2015 - TF-IDF",
+          stopwords = ["seventieth"])
+#+END_SRC

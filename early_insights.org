@@ -9,6 +9,9 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 #+END_SRC
 
+#+RESULTS:
+: None
+
 * Read the Data
 
 #+BEGIN_SRC python
@@ -504,3 +507,5 @@ wordcloud(freq_1970["tf_idf"], title = "1970 - TF-IDF",
 wordcloud(freq_2015["tf_idf"], title = "2015 - TF-IDF",
           stopwords = ["seventieth"])
 #+END_SRC
+
+* Blueprint: Finding a Keyword-in-Context

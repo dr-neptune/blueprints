@@ -88,7 +88,7 @@ class UnivariatePlot:
     #     plt.title(self.column_name.title())
     #     plt.show()
 
-    def gen_dist_plot_double(self):
+    def gen_dist_plot(self):
         """
         Generates a pair of plots:
         - a box and whisker plot on the left

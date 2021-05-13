@@ -308,8 +308,7 @@ def prepare(text, pipeline):
     return compose(*pipeline[::-1])(text)
 
 # applying prepare to a dataframe
-un = un.assign(tokens = un["text"].apply(prepare, pipeline = pipeline),
-               num_tokens = un["tokens"].map(len))
+un = un.assign(tokens = un["text"].apply(prepare, pipeline = pipeline))
 
 print(un[["text", "tokens", "num_tokens"]])
 #+END_SRC
@@ -509,3 +508,80 @@ wordcloud(freq_2015["tf_idf"], title = "2015 - TF-IDF",
 #+END_SRC
 
 * Blueprint: Finding a Keyword-in-Context
+
+KWIC (key word in context) analysis produces a list of text fragments of equal length showing the left and right context of the word.
+
+#+BEGIN_SRC python
+from textacy.extract import keyword_in_context
+import random
+import regex as re
+
+def kwic(doc_series, keyword, window=35, print_sample=5):
+    def add_kwic(text):
+        kwic_list.extend(keyword_in_context(text, keyword, window_width=window))
+
+    kwic_list = []
+    doc_series.map(add_kwic)
+
+    if print_sample is None or print_sample == 0:
+        return kwic_list
+    else:
+        k = min(print_sample, len(kwic_list))
+        print(
+            f"{k} random samples out of {len(kwic_list)}\n",
+            f"contexts for '{keyword}':",
+        )
+
+        for sample in random.sample(list(kwic_list), k):
+            print(
+                re.sub(r"[\n\t]", " ", sample[0])
+                + " "
+                + sample[1]
+                + " "
+                + re.sub(r"[\n\t]", " ", sample[2])
+            )
+
+
+print(kwic(un["text"], "SDGs"))
+#+END_SRC
+
+* Blueprint: Analyzing N-Grams
+
+#+BEGIN_SRC python
+# return ngrams of a list of tokens
+def ngrams(tokens, n=2, sep=" ", stopwords=set()):
+    return [
+        sep.join(ngram)
+        for ngram in zip(*[tokens[i:] for i in range(n)])
+        if len([t for t in ngram if t in stopwords]) == 0
+    ]
+
+
+print(ngrams(ex_tokens, stopwords=stopwords))
+
+# this version only keeps those bigrams that do not contain any stop words
+def ngrams(tokens, n=2, sep=" ", stopwords=set()):
+    return [
+        sep.join(ngram)
+        for ngram in zip(*[tokens[i:] for i in range(n)])
+        if len([t for t in ngram if t in stopwords]) == 0
+    ]
+
+
+print(ngrams(ex_tokens, stopwords=stopwords))
+
+# takes a dataframe and returns a the top n most frequent ngrams
+def get_most_common_ngrams(df, n = 2, top_n = 15):
+    return count_words(
+        df.assign(ngrams = df["text"]
+                  .apply(prepare, pipeline=[str.lower, tokenize])
+                  .apply(ngrams, n=n, stopwords=stopwords)),
+        "ngrams"
+    ).head(top_n)
+
+print(get_most_common_ngrams(un))
+
+print(un.columns)
+
+# with tf idf
+#+END_SRC

@@ -184,3 +184,82 @@ def count_words(df, column="tokens", preprocess=None, min_freq=2):
     freq_df.index.name = "token"
 
     return freq_df.sort_values("freq", ascending=False)
+
+
+from textacy.text_utils import KWIC
+
+from textacy.extract import keyword_in_context
+
+from pprint import pprint
+
+ex_ls = []
+
+ex_ls.extend(keyword_in_context("".join(un["text"]), keyword="SDGs", window_width=35))
+
+print(ex_ls[1])
+
+print(list(un["text"]))
+
+import random
+import regex as re
+
+
+def kwic(doc_series, keyword, window=35, print_sample=5):
+    def add_kwic(text):
+        kwic_list.extend(keyword_in_context(text, keyword, window_width=window))
+
+    kwic_list = []
+    doc_series.map(add_kwic)
+
+    if print_sample is None or print_sample == 0:
+        return kwic_list
+    else:
+        k = min(print_sample, len(kwic_list))
+        print(
+            f"{k} random samples out of {len(kwic_list)}\n",
+            f"contexts for '{keyword}':",
+        )
+
+        for sample in random.sample(list(kwic_list), k):
+            print(
+                re.sub(r"[\n\t]", " ", sample[0])
+                + " "
+                + sample[1]
+                + " "
+                + re.sub(r"[\n\t]", " ", sample[2])
+            )
+
+
+print(kwic(un["text"], "SDGs"))
+
+
+def ngrams(tokens, n=2, sep=" "):
+    return [sep.join(ngram) for ngram in zip(*[tokens[i:] for i in range(n)])]
+
+
+ex_text = "the visible manifestation of the global climate change"
+
+ex_tokens = tokenize(ex_text)
+
+print("|".join(ngrams(ex_tokens, 2)))
+
+
+def ngrams(tokens, n=2, sep=" ", stopwords=set()):
+    return [
+        sep.join(ngram)
+        for ngram in zip(*[tokens[i:] for i in range(n)])
+        if len([t for t in ngram if t in stopwords]) == 0
+    ]
+
+
+print(ngrams(ex_tokens, stopwords=stopwords))
+
+un["bigrams"] = (
+    un["text"]
+    .apply(prepare, pipeline=[str.lower, tokenize])
+    .apply(ngrams, n=2, stopwords=stopwords)
+)
+
+from collections import Counter
+
+print(count_words(un, "bigrams").head(15))

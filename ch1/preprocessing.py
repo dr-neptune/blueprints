@@ -86,69 +86,40 @@ class TextPreprocessor:
 
         return freq_df
 
-    def attach_tfidf(self, min_df=2, save=False):
+    def attach_tfidf(self, save=False):
         """
         Requires both tokenization and a frequency df!
         WARNING: Not too certain about this. I took a bunch from a book
-        but I also twiddled things and didn't do any testing
+        but I also twiddled things and couldn't get the wordcloud to match
+        the one from the book.
         """
 
-        def compute_idf(min_df=2):
-            def update(doc):
-                counter.update(set(doc))
-
+        def compute_idf():
             # count tokens
             counter = Counter()
-            self.df["tokens"].map(update)
+            self.df["tokens"].map(lambda tokens: counter.update(set(tokens)))
 
-            # create a df and compute idf
-            idf_df = pd.DataFrame.from_dict(
-                counter, orient="index", columns=["df"]
-            ).query("df >= @min_df")
-
-            idf_df["idf"] = np.log(len(self.df) / idf_df["df"]) + 0.1
+            # create data frame and compute idf
+            idf_df = pd.DataFrame.from_dict(counter, orient="index", columns=["df"])
+            idf_df["idf"] = np.log(len(self.freq_df) / idf_df["df"]) + 0.1
             idf_df.index.name = "token"
             return idf_df
 
-        # def update(doc):
-        #     tokens = doc if preprocess is None else
-        #     preprocess(doc)
-        #     counter.update(set(tokens))
-        # # count tokens
-        # counter = Counter()
-        # df[column].map(update)
-        # # create DataFrame and compute idf
-        # idf_df = pd.DataFrame.from_dict(counter, orient='index',
-        #                                 columns=['df'])
-        # idf_df = idf_df.query('df >= @min_df')
-        # idf_df['idf'] = np.log(len(df)/idf_df['df'])+0.1
-        # idf_df.index.name = 'token'
-        # return idf_df
-
-        # def compute_idf(min_df=min_df):
-        #     # create data frame and compute idf
-        #     self.freq_df["idf"] = (
-        #         np.log(len(self.df) / self.freq_df.query("freq > @min_df")["freq"])
-        #         + 0.1
-        #     )
-        #     return self.freq_df
-
-        tf_idf = self.freq_df["freq"] * compute_idf()["idf"]
-
+        # def attach_tfidf(self):
+        idf_df = compute_idf()
         if save:
-            self.tfidf = tf_idf.fillna(0.001)
+            self.tfidf = self.freq_df["freq"] * idf_df["idf"]
             return self
-        return tf_idf.fillna(0.001)
+        return self.df.assign(tf_idf=self.freq_df["freq"] * idf_df["idf"])
 
 
-un_prep = TextPreprocessor(un[un["year"] == 1970])
-
+# un_prep = TextPreprocessor(un[un["year"] == 1970])
 
 # print(un := un_prep.prep("text"))
 
-print(un_prep.prep("text", save=True).word_counts(save=True).attach_tfidf(save=True))
+# print(un_prep.prep("text", save=True).word_counts(save=True).attach_tfidf(save=True))
 
-print(un_prep.tfidf)
+# print(un_prep.tfidf)
 
 # print(un_prep.attach_tfidf())
 
@@ -226,14 +197,10 @@ class TextPlot(TextPreprocessor):
             print("Please try type = 'freq' or type = 'tf_idf'")
 
 
-un_plots = TextPlot(un[un["year"] == 2015])
+un_plots = TextPlot(un[un["year"] == 1970])
 
 un_plots.freq_plot(top_n=20)
+un_plots.freq_plot(top_n=20)
 
+un_plots.wordcloud(p_type="freq")
 un_plots.wordcloud(p_type="tf_idf")
-
-# # print(un_plots.freq_df.index)
-
-# # print(un[(un["country"] == "USA")])
-
-# print(un_plots.tfidf)

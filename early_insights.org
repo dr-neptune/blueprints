@@ -308,7 +308,8 @@ def prepare(text, pipeline):
     return compose(*pipeline[::-1])(text)
 
 # applying prepare to a dataframe
-un = un.assign(tokens = un["text"].apply(prepare, pipeline = pipeline))
+un = un.assign(tokens = un["text"].apply(prepare, pipeline = pipeline),
+               num_tokens=un["tokens"].map(len))
 
 print(un[["text", "tokens", "num_tokens"]])
 #+END_SRC
@@ -582,6 +583,57 @@ def get_most_common_ngrams(df, n = 2, top_n = 15):
 print(get_most_common_ngrams(un))
 
 print(un.columns)
+#+END_SRC
 
-# with tf idf
+* Blueprint: Comparing Frequencies Across Time Intervals and Categories
+
+** Creating Frequency Timelines
+
+#+BEGIN_SRC python
+def count_keywords(tokens, keywords):
+    tokens = [t for t in tokens if t in keywords]
+    counter = Counter(tokens)
+    return [counter.get(k, 0) for k in keywords]
+
+keywords = ["nuclear", "terrorism", "climate", "freedom"]
+tokens = ["nuclear", "climate", "climate", "freedom", "climate", "freedom"]
+
+print(count_keywords(tokens, keywords))
+
+def count_keywords_by(df, by, keywords, column = "tokens"):
+    freq_matrix = df[column].apply(count_keywords, keywords = keywords)
+    freq_df = pd.DataFrame.from_records(freq_matrix, columns = keywords)
+    # copy the grouping columns
+    freq_df[by] = df[by]
+    return freq_df.groupby(by = by).sum().sort_values(by)
+
+freq_df = count_keywords_by(un, by = "year", keywords = keywords)
+
+print(freq_df)
+
+freq_df.plot(kind = "line")
+plt.show()
+#+END_SRC
+
+** Creating Frequency Heatmaps
+
+#+BEGIN_SRC python
+keywords = ["terrorism", "terrorist", "nuclear", "war", "oil", "syria", "syrian", "refugees",
+            "migration", "peacekeeping", "humanitarian", "climate", "change", "sustainable", "sdgs"]
+
+freq_df = count_keywords_by(un, by = "year", keywords = keywords)
+
+# compute relative frequencies based on total number of tokens per year
+freq_df = freq_df.div(un.groupby("year")["num_tokens"].sum(), axis = 0)
+
+# apply sqrt as sublinear filter for better contrast
+freq_df = freq_df.apply(np.sqrt)
+
+# plot
+sns.heatmap(data = freq_df.T,
+            xticklabels=True,
+            yticklabels=True,
+            cbar=False,
+            cmap="Reds")
+plt.show()
 #+END_SRC

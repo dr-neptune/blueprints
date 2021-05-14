@@ -1,0 +1,160 @@
+#+TITLE: Preparing Textual Data for Statistics and Machine Learning
+
+#+BEGIN_SRC python
+import pandas as pd
+
+posts_file = "data/rspct_autos.tsv.gz"
+posts_df = pd.read_csv(posts_file, sep = "\t")
+
+subred_file = "data/subreddit_info.csv"
+subred_df = pd.read_csv(subred_file).set_index(["subreddit"])
+
+df = posts_df.join(subred_df, on = "subreddit")
+#+END_SRC
+
+* Blueprint: Standardizing Attribute Names
+
+#+BEGIN_SRC python
+print(df.columns)
+
+column_mapping = {
+    "id": "id",
+    "subreddit": "subreddit",
+    "title": "title",
+    "selftext": "text",
+    "category_1": "category",
+    "category_2": "subcategory",
+    "category_3": None,
+    "in_data": None,
+    "reason_for_exclusion": None
+}
+
+# define remaining columns
+columns = [c for c in column_mapping.keys() if column_mapping[c] != None]
+
+# select and rename those columns
+df = df[columns].rename(columns = column_mapping)
+
+# check that data is limited to autos
+print(df.query("category == 'autos'"))
+
+# sample a record to get a look at data
+print(df.sample(1).T)
+
+glimpse(df)
+
+def glimpse(df):
+    print(df.sample(1).T)
+
+# saving and loading a dataframe
+import sqlite3
+
+# write to sqlite db
+db_name = "reddit-selfposts.db"
+con = sqlite3.connect(db_name)
+df.to_sql("posts", con, index = False, if_exists = "replace")
+con.close()
+
+# restore from sqlite db
+con = sqlite3.connect(db_name)
+df = pd.read_sql("select * from posts", con)
+con.close()
+#+END_SRC
+
+* Blueprint: Identify Noise with Regular Expressions
+
+#+BEGIN_SRC python
+import re
+
+sus_text = """
+After viewing the [PINKIEPOOL Trailer](https://www.youtu.be/watch?
+v=ieHRoHUg)
+it got me thinking about the best match ups.
+<lb>Here's my take:<lb><lb>[](/sp)[](/ppseesyou) Deadpool<lb>[]
+(/sp)[](/ajsly)
+Captain America<lb>"""
+
+sus_pattern = re.compile(r"[&#<>{}\[\]\\]")
+
+def impurity(text, min_len = 10):
+    """
+    Returns the share of suspicious characters in a text
+    """
+    if text == None or len(text) < min_len:
+        return 0
+    else:
+        return len(sus_pattern.findall(text)) / len(text)
+
+print(impurity(sus_text))
+
+# add new column to the data frame
+print(df := df.assign(impurity = df["text"].apply(impurity, min_len = 10)))
+
+# get the top 3 most impure records
+print(df[["text", "impurity"]].sort_values(by = "impurity", ascending = False).head(3))
+
+# get instances of <lb>, <tab>
+from collections import Counter
+
+def count_words(df, column = "tokens", preprocess = None, min_freq = 2):
+    # process tokens and update counter
+    def update(doc):
+        tokens = doc if preprocess is None else preprocess(doc)
+        counter.update(tokens)
+
+    # create a counter and run through all data
+    counter = Counter()
+    df[column].map(update)
+
+    # transform counter into a DataFrame
+    freq_df = pd.DataFrame.from_dict(counter, orient = "index", columns = ["freq"]).query("freq >= @min_freq")
+    freq_df.index.name = "token"
+
+    return freq_df.sort_values("freq", ascending = False)
+
+print(count_words(df, column = "text", preprocess=lambda t: re.findall(r"<[\w/]*>", t)))
+#+END_SRC
+
+* Blueprint: Removing Noise with Regular Expressions
+
+#+BEGIN_SRC python
+import html
+
+def clean(text):
+    # convert HTML escapes like &amp; to characters
+    text = html.unescape(text)
+
+    # chain of re.subs
+    replacements = [
+        # tags like <tab>, <lb>
+        (r"<[^<>]*>", " "),
+        # markdown URLs like [some text](https://...)
+        (r"\[([^\[\]]*)\]\([^\(\)]*\)", r"\1"),
+        # text or code in brackets like [0]
+        (r"\[[^\[\]]*\]", " "),
+        # standalone sequences of specials, matches &# but not #word
+        (r"(?:^|\s)[&#<>{}\[\]+|\\:-]{1,}(?:\s|$)", " "),
+        # standalone sequences of hyphens like --- or ==
+        (r"(?:^|\s)[\-=\+]{2,}(?:\s|$)", " "),
+        # sequences of white space
+        (r"\s+", " ")
+    ]
+
+    # run through all the replacements
+    for pattern, replacement in replacements:
+        text = re.sub(pattern, replacement, text)
+
+    return text.strip()
+
+print(clean(sus_text))
+print("Impurity:\t", impurity(clean(sus_text)))
+
+# check impurity of the cleaned text overall
+print(df := df.assign(clean_text = df["text"].map(clean),
+                      impurity = lambda df: df["clean_text"].apply(impurity, min_len = 20)))
+
+print(df[["clean_text", "impurity"]].sort_values(by = "impurity", ascending = False).head(3))
+
+#+END_SRC
+
+* Blueprint: Character Normalization with textacy

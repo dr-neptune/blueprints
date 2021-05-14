@@ -1,0 +1,148 @@
+#+TITLE: Extracting Textual Insights with APIs
+
+* Blueprint: Extracting Data from an API using the Requests Module
+
+#+BEGIN_SRC python
+import requests
+
+response = requests.get("https://api.github.com/repositories",
+                        headers = {"Accept": "application/vnd.github.v3+json"})
+
+print(response.status_code)
+print(response.encoding)
+print(response.headers["content-type"])
+
+import json
+
+print(json.dumps(response.json()[0], indent = 2)[:200])
+
+# using the search API
+response = requests.get("https://api.github.com/search/repositories",
+                        params={"q": "data_science+language:clojure"},
+                        headers={"Accept": "application/vnd.github.v3.text-match+json"})
+
+print(response.status_code)
+
+for item in response.json()["items"][:5]:
+    print(item["name"] + ": repository " +
+          item["text_matches"][0]["property"] +
+          item["text_matches"][0]["fragment"] +
+          item["text_matches"][0]["matches"][0]["text"])
+
+# monitor comments in a repo
+# returns only 30 comments because of pagination
+response = requests.get("https://api.github.com/repos/pytorch/pytorch/issues/comments")
+print("Response Code:\t", response.status_code)
+print("Number of Comments:\t", len(response.json()))
+
+# view the links
+print(response.links)
+
+# write a function to parse all results on one page,
+# then call the next url until the last page is reached
+def get_all_pages(url, param = None, header = None):
+    output_json = []
+    response = requests.get(url, params = param, headers = header)
+    if response.status_code == 200:
+        output_json = response.json()
+        if 'next' in response.links:
+            next_url = response.links['next']['url']
+            if next_url is not None:
+                output_json += get_all_pages(next_url, param, header)
+    return output_json
+
+out = get_all_pages(
+    url = "https://api.github.com/repos/pytorch/pytorch/issues/comments",
+    param = {
+        "since": "2020-07-01T10:00:01Z",
+        "sorted": "created",
+        "direction": "desc"
+    },
+    header = {"Accept": "application/vnd.github.v3+json"}
+)
+
+print(out)
+
+df = pd.DataFrame(out)
+
+print(df["body"].count())
+
+# check for rate limiting
+import datetime
+import time
+
+response = requests.head("https://api.github.com/repos/pytorch/pytorch/issues/comments")
+
+print("X-Ratelimit-Limits", response.headers["X-Ratelimit-Limit"])
+print("X-Ratelimit-Remaining", response.headers["X-Ratelimit-Remaining"])
+print("Rate Limits Reset At", datetime.datetime.fromtimestamp(int(response.headers["X-Ratelimit-Reset"])).strftime("%c"))
+
+# space out our requests so that way it respects rate limits
+def handle_rate_limits(response):
+    now = datetime.now()
+    reset_time = datetime.fromtimestamp(int(response.headers["X-Ratelimit-Reset"])),
+    remaining_requests = response.headers["X-Ratelimit-Remaining"]
+    remaining_time = (reset_time - now).total_seconds()
+    intervals = remaining_time / (1.0 + int(remaining_requests))
+    print('Sleeping for', intervals)
+    time.sleep(intervals)
+    return True
+
+# pull from API with retries and backoff factor
+from requests.adapters import HTTPAdapter
+from requests.packages.urllib3.util.retry import Retry
+
+retry_strategy = Retry(
+    total = 5,
+    status_forcelist=[500, 503, 504],
+    backoff_factor=1
+)
+
+retry_adapter = HTTPAdapter(max_retries=retry_strategy)
+
+http = requests.Session()
+http.mount("https://", retry_adapter)
+http.mount("http://", retry_adapter)
+
+response = http.get("https://api.github.com/search/repositories",
+                    params = {"q": "data_science+language:python"})
+
+for item in response.json()["items"][:5]:
+    print(item["name"])
+
+
+# handle pagination, rate limits, and retries
+retry_strategy = Retry(
+    total = 5,
+    status_forcelist=[500, 503, 504],
+    backoff_factor=1
+)
+
+retry_adapter = HTTPAdapter(max_retries=retry_strategy)
+
+http = requests.Session()
+http.mount("https://", retry_adapter)
+http.mount("http://", retry_adapter)
+
+
+# does not work :(
+def get_all_pages(url, param = None, header = None, output_json = []):
+    response = http.get(url, params = param, headers = header)
+    if response.status_code == 200:
+        output_json += response.json()
+        if 'next' in response.links:
+            next_url = response.links["next"]["url"]
+            if (next_url is not None) and (handle_rate_limits(response)):
+                get_all_pages(next_url, param, header, output_json)
+    return output_json
+
+out = get_all_pages(
+    url = "https://api.github.com/repos/pytorch/pytorch/issues/comments",
+    param = {
+        "since": "2020-07-01T10:00:01Z",
+        "sorted": "created",
+        "direction": "desc"
+    },
+    header = {"Accept": "application/vnd.github.v3+json"}
+)
+#+END_SRC

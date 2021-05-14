@@ -1,0 +1,359 @@
+#+TITLE: Scraping Websites and Extracting Data
+
+* Blueprint: Downloading and Interpreting robots.txt
+
+#+BEGIN_SRC text
+# robots_allow.txt for www.reuters.com
+# Disallow: /*/key-developments/article/*
+
+User-agent: *
+Disallow: /finance/stocks/option
+Disallow: /finance/stocks/financialHighlights
+Disallow: /search
+Disallow: /beta
+Disallow: /designtech*
+Disallow: /featured-optimize
+Disallow: /energy-test
+Disallow: /article/beta
+Disallow: /sponsored/previewcampaign
+Disallow: /sponsored/previewarticle
+Disallow: /test/
+Disallow: /commentary
+Disallow: /news/archive/commentary
+Disallow: /brandfeatures/venture-capital*
+
+SITEMAP: https://www.reuters.com/arc/outboundfeeds/sitemap-index/?outputType=xml
+SITEMAP: https://www.reuters.com/arc/outboundfeeds/news-sitemap-index/?outputType=xml
+SITEMAP: https://www.reuters.com/sitemap_video_index.xml
+SITEMAP: https://www.reuters.com/brandfeature/sitemap
+
+User-agent: Pipl
+Disallow: /
+
+User-Agent: omgilibot
+Disallow: /
+User-Agent: omgili
+Disallow: /
+User-agent: omgili/0.5 +https://omgili.com
+Disallow: /
+#+END_SRC
+
+#+BEGIN_SRC python
+from re import MULTILINE
+from sys import path
+import urllib.robotparser
+from bs4 import BeautifulSoup
+
+from numpy.core.defchararray import join
+
+rp = urllib.robotparser.RobotFileParser()
+rp.set_url("https://www.reuters.com/robots.txt")
+
+rp.read()
+print(rp.can_fetch("*", "https://www.reuters.com/sitemap.xml"))
+#+END_SRC
+
+* Blueprint: Finding URLs from sitemap.xml
+
+Reuters even mentions the URLs of the sitemap for news:
+
+#+BEGIN_SRC text
+<!--
+ Generated Time:2021-05-14T18:01+00:00 . This is Google news site map INDEX for BETAUS .
+-->
+<sitemapindex>
+<sitemap>
+<loc>https://www.reuters.com/sitemap_news_index1.xml</loc>
+<lastmod>2021-05-14T18:01+00:00</lastmod>
+</sitemap>
+<sitemap>
+<loc>https://www.reuters.com/sitemap_news_index2.xml</loc>
+<lastmod>2021-05-14T18:01+00:00</lastmod>
+</sitemap>
+<sitemap>
+<loc>https://www.reuters.com/sitemap_news_index3.xml</loc>
+<lastmod>2021-05-14T18:01+00:00</lastmod>
+</sitemap>
+</sitemapindex>
+#+END_SRC
+
+In each of the links above, we are met with large xml files.
+We can grab the <loc> tags, which contain the URLs for news articles.
+
+#+BEGIN_SRC python
+import xmltodict
+import requests
+
+# parse the sitemap
+sitemap = xmltodict.parse(requests.get("https://www.reuters.com/sitemap_news_index1.xml").text)
+
+# look at what is in the dict
+urls = [url["loc"] for url in sitemap["urlset"]["url"]]
+
+print("\n".join(urls[0:3]))
+#+END_SRC
+
+* Blueprint: Finding URLs from RSS
+
+It looks like the RSS feed is down on Reuter's main page.
+
+#+BEGIN_SRC python
+import feedparser
+
+feed = feedparser.parse("http://feeds.reuters.com/Reuters/worldNews"
+#+END_SRC
+
+* Blueprint: Downloading HTML Pages with Python
+
+#+BEGIN_SRC python
+import os
+
+s = requests.Session()
+
+for url in urls[0:10]:
+    # get the parse after the last / in URL and use it as a filename
+    fname = os.path.join("html/", url.split("/")[-1])
+
+    # download the url
+    r = s.get(url)
+
+    if r.ok:
+        print("Downloading:\t", fname)
+        with open(fname, "w+b") as f:
+            f.write(r.text.encode("utf-8"))
+    else:
+        print("error with URL %s" % url)
+
+#+END_SRC
+
+* Blueprint: Downloading HTML Pages with wget
+
+When downloading more than a few thousand pages, it is better to first generate a list of URLs and then download them externally via a dedicated program like wget which has options for things like not repeating and recursively downloading.
+
+#+BEGIN_SRC python
+with open("urls.txt", "w+b") as f:
+    f.write("\n".join(urls).encode("utf-8"))
+#+END_SRC
+
+#+BEGIN_SRC bash
+wget -nc -i urls.txt 		# -nc skips existing files
+#+END_SRC
+
+* Blueprint: Extracting Data with Regular Expressions
+
+#+BEGIN_SRC python
+import requests
+import re
+
+url = "https://www.reuters.com/article/us-health-vaping-marijuana-idUSKBN1WG4KT"
+
+# use the part after the last / as filename
+fname = os.path.join("html/", url.split("/")[-1] + ".html")
+r = requests.get(url)
+
+# write the file
+with open(fname, "w+b") as f:
+    f.write(r.text.encode("utf-8"))
+
+# extract the title
+with open(fname, "r") as f:
+    html = f.read()
+    g = re.search(r"<title>(.*)</title>", html, re.MULTILINE|re.DOTALL)
+    if g:
+        print(g.groups()[0])
+#+END_SRC
+
+* Blueprint: Using an HTML Parser for Extraction
+
+#+BEGIN_SRC python
+from bs4 import BeautifulSoup
+
+soup = BeautifulSoup(html, "html.parser")
+
+# select the specific element
+print(soup.select(".ArticleHeader-headline-NlAqj").h1)
+# select the text from the h1 tag
+print(soup.h1.text)
+# select the text from the title
+print(soup.title.text)
+
+# extracting the article text
+print(soup.select_one("div.ArticleBodyWrapper").text)
+
+# extracting image captions
+## good
+print(soup.select(".WithCaption-caption-container-Y-li-"))
+
+## better
+print(soup.select_one("div.ArticleBodyWrapper figcaption").text)
+
+# extracting the URL when you don't download all the files separately
+print(soup.find("link", {"rel": "canonical"})["href"])
+
+# extracting list information (authors)
+print(soup.find("meta", {"name": "Author"}))
+
+# get the names of the authors from the list of nodes
+print([a.text for a in soup.select(".Byline-byline-1sVmo")])
+#+END_SRC
+
+* Blueprint: Spidering
+
+The process works as follows:
+
+1. Define how many pages of the archive should be downloaded
+2. Download 3each page of the archive into a file called page_000001.html, page_000002.html, and so on. Skip if already present
+3. For each page_*.html file, extract the URLs of the referenced articles
+4. For each article URL, download the article into a local HTML file. Skip if already present
+5. For each article file, extract the content into a dict and combine these dicts into a Pandas DataFrame
+
+#+BEGIN_SRC python :tangle spider.py
+import requests
+import glob
+from bs4 import BeautifulSoup
+import os.path
+from dateutil import parser
+import pandas as pd
+
+
+def download_archive_page(page):
+    fname = "page-%06d.html" % page
+    if not os.path.isfile(fname):
+        url = (
+            "https://www.reuters.com/news/archive/"
+            + "?view=page&page=%d&pageSize=10" % page
+        )
+        r = requests.get(url)
+        with open(fname, "w+") as f:
+            f.write(r.text)
+
+
+def parse_archive_page(page_file):
+    with open(page_file, "r") as f:
+        html = f.read()
+
+    soup = BeautifulSoup(html, "html.parser")
+    hrefs = [
+        "https://www.reuters.com" + a["href"]
+        for a in soup.select("article.story div.story-content a")
+    ]
+    return hrefs
+
+
+def download_article(url):
+    # check if article already there
+    fname = url.split("/")[-1] + ".html"
+    if not os.path.isfile(fname):
+        r = requests.get(url)
+        with open(fname, "w+") as f:
+            f.write(r.text)
+
+
+# this needs to be updated
+def parse_article(article_file):
+    with open(article_file, "r") as f:
+        html = f.read()
+    r = {}
+    soup = BeautifulSoup(html, "html.parser")
+    r["id"] = soup.select_one("div.StandardArticle_inner-container")["id"]
+    r["url"] = soup.find("link", {"rel": "canonical"})["href"]
+    r["headline"] = soup.h1.text
+    r["section"] = soup.select_one("div.ArticleHeader_channel a").text
+    r["text"] = soup.select_one("div.StandardArticleBody_body").text
+    r["authors"] = [
+        a.text
+        for a in soup.select(
+            "div.BylineBar_first-container.\
+                    ArticleHeader_byline-bar\
+                    div.BylineBar_byline span"
+        )
+    ]
+    r["time"] = soup.find("meta", {"property": "og:article:published_time"})["content"]
+    return r
+
+
+# download 10 pages of archive
+for p in range(1, 10):
+    download_archive_page(p)
+
+# parse archive and add to article urls
+article_urls = []
+
+for page_file in glob.glob("page-*.html"):
+    article_urls += parse_archive_page(page_file)
+
+# download articles
+for url in article_urls:
+    download_article(url)
+
+# arrange in pandas DataFrame
+df = pd.DataFrame()
+
+for article_file in glob.glob("*-id???????????.html"):
+    df = df.append(parse_article(article_file), ignore_index=True)
+
+df["time"] = pd.to_datetime(df.time)
+#+END_SRC
+
+* Density-Based Text Extraction
+
+#+BEGIN_SRC python
+from readability import Document
+
+doc = Document(html)
+
+# get title
+print(doc.title())
+
+# get short title
+print(doc.short_title())
+
+# summary
+print(doc.summary())
+
+## extract with bs4
+density_soup = BeautifulSoup(doc.summary(), "html.parser")
+
+print(density_soup.body.text)
+#+END_SRC
+
+* Blueprint: Scraping the Reuters Archive with Scrapy
+
+#+BEGIN_SRC python :tangle scrapy.py
+import scrapy
+from scrapy import Spider
+import logging
+
+
+class ReutersArchiveSpider(scrapy.Spider):
+    name = "reuters-archive"
+
+    custom_settings = {
+        "LOG_LEVEL": logging.WARNING,
+        "FEED_FORMAT": "json",
+        "FEED_URI": "reuters-archive.json",
+    }
+
+    start_urls = ["https://www.reuters.com/news/archive"]
+
+    def parse(self, response):
+        for article in response.css("article.story div.story-content a"):
+            yield response.follow(
+                article.css("a::attr(href)").extract_first(), self.parse_article
+            )
+
+        next_page_url = response.css("a control-nav-next::attr(href)").extract_first()
+        if (next_page_url is not None) and ("page=2" not in next_page_url):
+            yield response.follow(next_page_url, self.parse)
+
+    def parse_article(self, response):
+        yield {"title": response.css("h1::text").extract_first().strip()}
+
+
+from scrapy.crawler import CrawlerProcess
+
+process = CrawlerProcess()
+
+process.crawl(ReutersArchiveSpider)
+process.start()
+#+END_SRC

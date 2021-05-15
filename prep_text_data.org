@@ -2,6 +2,7 @@
 
 #+BEGIN_SRC python
 import pandas as pd
+from toolz.functoolz import compose
 
 posts_file = "data/rspct_autos.tsv.gz"
 posts_df = pd.read_csv(posts_file, sep = "\t")
@@ -158,3 +159,53 @@ print(df[["clean_text", "impurity"]].sort_values(by = "impurity", ascending = Fa
 #+END_SRC
 
 * Blueprint: Character Normalization with textacy
+
+#+BEGIN_SRC python
+import textacy.preprocessing as tprep
+
+def normalize(text, additional_ops = []):
+    operations = [
+        tprep.normalize.hyphenated_words,
+        tprep.normalize.quotation_marks,
+        tprep.normalize.unicode,
+        tprep.remove.accents
+    ]
+
+    if additional_ops:
+        operations.extend(additional_ops)
+
+    for op in operations:
+        text = op(text)
+
+    return text
+
+ex_text = "The café “Saint-Raphaël” is loca-\nted on Côte dʼAzur. yes@mailbox.org visit http://website.web"
+
+print("\nRegular:\t", ex_text, "\nNormalized:\t", normalize(ex_text, additional_ops = [tprep.replace.emails, tprep.replace.urls]))
+#+END_SRC
+
+* Blueprint: Pattern-Based Data Masking with textacy
+
+
+#+BEGIN_SRC python
+# find the most frequently used URLs in the corpus
+from textacy.preprocessing.resources import RE_URL
+
+print(count_words(df, column="clean_text", preprocess = RE_URL.findall))
+
+# finalize data cleaning with data masking and normalization
+from toolz import compose
+
+print(df := df.assign(clean_text = df["clean_text"].map(compose(normalize, tprep.replace.urls))))
+
+# rename text columns and drop impurity
+print(df := df.rename(columns = {"text": "raw_text",
+                                 "clean_text": "text"})
+      .drop(columns = ["impurity"]))
+
+print(df.columns)
+
+con = sqlite3.connect(db_name)
+df.to_sql("posts_cleaned", con, index = False, if_exists = "replace")
+con.close()
+#+END_SRC

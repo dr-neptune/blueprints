@@ -209,3 +209,310 @@ con = sqlite3.connect(db_name)
 df.to_sql("posts_cleaned", con, index = False, if_exists = "replace")
 con.close()
 #+END_SRC
+
+* Blueprint: Tokenization with Regular Expressions
+
+#+BEGIN_SRC python
+text = """
+2019-08-10 23:32: @pete/@louis - I don't have a well-designed
+solution for today's problem. The code of module AC68 should be
+-1.
+Have to think a bit... #goodnight ;-) 😩😬"""
+
+import re
+
+# scikitlearn approach uses \w\w+ for default tokenization
+tokens = re.findall(r"\w\w+", text)
+print(*tokens, sep = "|")
+
+# with additional expressions for emojis
+RE_TOKEN = re.compile(r"""
+( [#]?[@\w'’\.\-\:]*\w        # words, hashtags, and email addresses
+| [:;<]\-?[\)\(3]             # coarse pattern for basic text emojis
+| [\U0001F100-\U0001FFFF]     # coarse range for unicode emojis
+)
+""", re.VERBOSE)
+
+def tokenize(text):
+    return RE_TOKEN.findall(text)
+
+tokens = tokenize(text)
+
+print(*tokens, sep = "|")
+#+END_SRC
+
+* Tokenization with NLTK
+
+#+BEGIN_SRC python
+import nltk
+
+tokens = nltk.tokenize.word_tokenize(text)
+print(*tokens, sep = "|")
+#+END_SRC
+
+* Linguistic Processing with spaCy
+
+** Instantiating a Pipeline
+
+#+BEGIN_SRC python
+import spacy
+
+nlp = spacy.load("en_core_web_sm")
+
+print(nlp.pipeline)
+
+# if we only need some parts of the pipeline, we can disable others on load
+nlp = spacy.load("en_core_web_sm", disable=["parser", "ner"])
+#+END_SRC
+
+** Processing Text
+
+#+BEGIN_SRC python
+nlp = spacy.load("en_core_web_sm")
+text = "My best friend Ryan Peters likes fancy adventure games."
+doc = nlp(text)
+
+for token in doc:
+    print(token, end = "|")
+
+def display_nlp(doc, include_punct = False):
+    """
+    Generate data frame for visualization of spaCy tokens.
+    """
+    rows = []
+    for i, t in enumerate(doc):
+        if not t.is_punct or include_punct:
+            row = {"token": i,
+                   "text": t.text,
+                   "lemma_": t.lemma_,
+                   "is_stop": t.is_stop,
+                   "is_alpha": t.is_alpha,
+                   "pos_": t.pos_,
+                   "dep_": t.dep_,
+                   "ent_type_": t.ent_type_,
+                   "ent_iob_": t.ent_iob_}
+            rows.append(row)
+    df = pd.DataFrame(rows).set_index("token")
+    df.index.name = None
+    return df
+
+print(display_nlp(doc))
+#+END_SRC
+
+* Blueprint: Customizing Tokenization
+
+#+BEGIN_SRC python
+text = "@Pete: choose low-carb #food #eat-smart. _url_ ;-) 😋👍"
+
+doc = nlp(text)
+
+for token in doc:
+    print(token, end = " | ")
+
+# create a tokenizer with individual rules for infix, prefix, suffix splitting
+from spacy.tokenizer import Tokenizer
+from spacy.util import compile_prefix_regex, compile_infix_regex, compile_suffix_regex
+
+def custom_tokenizer(nlp):
+    # use default patterns except the ones matched by re.search
+    prefixes = [pattern for pattern in nlp.Defaults.prefixes if pattern not in ["-", "_", "#"]]
+    infixes = [pattern for pattern in nlp.Defaults.infixes if not re.search(pattern, "xx-xx")]
+    suffixes = [pattern for pattern in nlp.Defaults.suffixes if pattern not in ["_"]]
+
+    return Tokenizer(vocab = nlp.vocab,
+                     rules = nlp.Defaults.tokenizer_exceptions,
+                     prefix_search = compile_prefix_regex(prefixes).search,
+                     infix_finditer = compile_infix_regex(infixes).finditer,
+                     suffix_search = compile_suffix_regex(suffixes).search,
+                     token_match = nlp.Defaults.token_match)
+
+nlp.tokenizer = custom_tokenizer(nlp)
+
+doc = nlp(text)
+
+for token in doc:
+    print(token, end = "|")
+#+END_SRC
+
+* Blueprint: Working with Stop Words
+
+#+BEGIN_SRC python
+text = "Dear Ryan, we need to sit down and talk. Regards, Pete"
+doc = nlp(text)
+
+non_stop = [t for t in doc if not t.is_stop and not t.is_punct]
+
+print(non_stop)
+
+# modify list of stop words
+nlp = spacy.load("en_core_web_sm")
+nlp.vocab["down"].is_stop = False
+nlp.vocab["Dear"].is_stop = True
+nlp.vocab["Regards"].is_stop = True
+
+# update
+doc = nlp(text)
+
+non_stop = [t for t in doc if not t.is_stop and not t.is_punct]
+
+print(non_stop)
+#+END_SRC
+
+* Blueprint: Extracting Lemmas Based on Part of Speech
+
+#+BEGIN_SRC python
+text = "My best friend Ryan Peters likes fancy adventure games."
+doc = nlp(text)
+
+print(*[t.lemma_ for t in doc], sep = "|")
+
+# get just the nouns and proper nouns
+nouns = [t for t in doc if t.pos_ in ["NOUN", "PROPN"]]
+print(nouns)
+
+print(display_nlp(doc))
+
+# extract adjectives and nouns from the sample sentence
+import textacy
+
+tokens = textacy.extract.words(doc, filter_stops = True,
+                               filter_punct = True,
+                               filter_nums = True,
+                               include_pos = ["ADJ", "NOUN"],
+                               exclude_pos = None,
+                               min_freq = 1)
+
+print(*[t for t in tokens], sep = "|")
+
+def extract_lemmas(doc, **kwargs):
+    return [t.lemma_ for t in textacy.extract.words(doc, **kwargs)]
+
+lemmas = extract_lemmas(doc, include_pos = ["ADJ", "NOUN"])
+
+print(*lemmas, sep = "|")
+#+END_SRC
+
+* Blueprint: Extracting Noun Phrases
+
+#+BEGIN_SRC python
+# extract sequences of nouns with a preceding adjective
+text = "My best friend Ryan Peters likes fancy adventure games."
+doc = nlp(text)
+
+patterns = ["POS:ADJ POS:NOUN:+"]
+
+spans = textacy.extract.token_matches(doc, patterns = patterns)
+
+print(*[s.lemma_ for s in spans], sep = "|")
+
+# alternatively
+print(*doc.noun_chunks, sep = "|")
+
+# search for sequence of nouns preceded by given token and return the lemmas
+def extract_noun_phrases(doc, preceding_pos = ["NOUN"], sep = "_"):
+    patterns = []
+    for pos in preceding_pos:
+        patterns.append(f"POS:{pos} POS:NOUN:+")
+    spans = textacy.extract.token_matches(doc, patterns = patterns)
+    return [sep.join([t.lemma_ for t in s]) for s in spans]
+
+print(*extract_noun_phrases(doc, ["ADJ", "NOUN"]), sep = " | ")
+#+END_SRC
+
+* Blueprint: Extracting Named Entities
+
+#+BEGIN_SRC python
+text = "James O'Neill, chairman of World Cargo Inc, lives in San Francisco."
+doc = nlp(text)
+
+for ent in doc.ents:
+    print(f"({ent.text}, {ent.label_})", end = " ")
+
+# visualization
+import matplotlib.pyplot as plt
+from spacy import displacy
+displacy.serve(doc, style = "ent")
+
+def extract_entities(doc, include_types = None, sep = "_"):
+    ents = textacy.extract.entities(doc,
+                                    include_types = include_types,
+                                    exclude_types = None,
+                                    drop_determiners = True,
+                                    min_freq = 1)
+    return [sep.join([t.lemma_ for t in e]) + "/" + e.label_ for e in ents]
+
+print(extract_entities(doc, ["PERSON", "GPE"]))
+#+END_SRC
+
+* Blueprint: Creating One Function to Get It All
+
+#+BEGIN_SRC python
+def extract_nlp(doc):
+    return {
+        "lemmas": extract_lemmas(doc,
+                                 exclude_pos = ["PART", "PUNCT", "DET", "PRON", "SYM", "SPACE"],
+                                 filter_stops = False),
+        "adjs_verbs": extract_lemmas(doc, include_pos = ["ADJ", "VERB"]),
+        "nouns": extract_lemmas(doc, include_pos = ["NOUN", "PROPN"]),
+        "noun_phrases": extract_noun_phrases(doc, ["NOUN"]),
+        "adj_noun_phrases": extract_noun_phrases(doc, ["ADJ"]),
+        "entities": extract_entities(doc, ["PERSON", "ORG", "GPE", "LOC"])
+    }
+
+text = "My best friend Ryan Peters likes fancy adventure games."
+doc = nlp(text)
+
+print("\n")
+for col, values in extract_nlp(doc).items():
+    print(f"{col}:\t\t{values}")
+
+# retrieve the list of returned column names
+nlp_columns = list(extract_nlp(nlp.make_doc("")).keys())
+print(nlp_columns)
+#+END_SRC
+
+* Blueprint: Using spaCy on a Large Dataset
+
+#+BEGIN_SRC python
+db_name = "reddit-selfposts.db"
+con = sqlite3.connect(db_name)
+df = pd.read_sql("select * from posts_cleaned", con)
+con.close()
+
+print(df := df.assign(text = df["title"] + ": " + df["text"]))
+
+# initialize new DataFrame columns we wish to fill with values
+for col in nlp_columns:
+    df[col] = None
+
+# see if we can perform the computation on a GPU
+if spacy.prefer_gpu():
+    print("Working on GPU")
+else:
+    print("No GPU found, working on CPU")
+
+# extract the features and place them in a dataframe
+batch_size = 50
+for i in range(0, len(df), batch_size):
+    docs = nlp.pipe(df["text"][i:i+batch_size])
+    for j, doc in enumerate(docs):
+        for col, values in extract_nlp(doc).items():
+            df[col].iloc[i+j] = values
+
+# frequency analysis
+count_words(df, "noun_phrases").head(10).plot(kind = "barh").invert_yaxis()
+plt.show()
+
+# persist the result (save to DB)
+## serialize the extracted lists to space separated strings
+df[nlp_columns] = df[nlp_columns].applymap(lambda items: " ".join(items))
+con = sqlite3.connect(db_name)
+df.to_sql("posts_nlp", con, index = False, if_exists = "replace")
+con.close()
+#+END_SRC
+
+Rule of Thumb:
+
+In general, you are better off with lemmatized text when you do text classification, topic modeling, or clustering based on TF-IDF.
+You should avoid or use sparingly those kinds of normalization or stop word removal for more complex machine learning tasks such as
+text summarization, machine translation, or question answering where the model needs to reflect the variety of the language.

@@ -1,0 +1,97 @@
+#+TITLE: Feature Engineering and Syntactic Similarity
+
+* Blueprint: Building Your Own Vectorizer
+
+#+BEGIN_SRC python
+# enumerating the vocabulary
+import pandas as pd
+import numpy as np
+
+sentences = ["It was the best of times",
+             "It was the worst of times",
+             "It was the age of wisdom",
+             "It was the age of foolishness"]
+
+tokenized_sentences = [[t for t in sentence.split()] for sentence in sentences]
+
+print(tokenized_sentences)
+
+vocabulary = set([w for s in tokenized_sentences for w in s])
+
+print(vocabulary)
+
+print(pd.DataFrame([[w, i] for i,w in enumerate(vocabulary)]))
+
+# vectorizing documents
+def onehot_encode(tokenized_sentence):
+    return [1 if w in tokenized_sentence else 0 for w in vocabulary]
+
+onehot = [onehot_encode(tokenized_sentence) for tokenized_sentence in tokenized_sentences]
+
+for (sentence, oh) in zip(sentences, onehot):
+    print("%s: %s" % (oh, sentence))
+
+# out of vocabulary documents
+print(onehot_encode("the age of wisdom is the best of times".split()))
+print(onehot_encode("John likes to watch movies. Mary likes movies too.".split()))
+
+# the document term matrix
+print("\n")
+print(pd.DataFrame(onehot, columns = vocabulary))
+
+# calculating similarities
+sim = [onehot[0][i] & onehot[1][i] for i in range(0, len(vocabulary))]
+sum(sim)
+print(np.dot(onehot[0], onehot[1]))
+
+# the similarity matrix
+print(np.dot(onehot, np.transpose(onehot)))
+
+# in sklearn
+from sklearn.preprocessing import MultiLabelBinarizer
+lb = MultiLabelBinarizer()
+lb.fit([vocabulary])
+print(lb.transform(tokenized_sentences))
+#+END_SRC
+
+* Blueprint: Using sklearn's CountVectorizer
+
+#+BEGIN_SRC python
+from sklearn.feature_extraction.text import CountVectorizer
+cv = CountVectorizer()
+
+more_sentences = sentences + \
+    ["John likes to watch movies. Mary likes movies too.",
+     "Mary also likes to watch football games."]
+
+# fitting the vocabulary
+cv.fit(more_sentences)
+
+CountVectorizer(analyzer="word",
+                binary=False,
+                decode_error="strict",
+                dtype="<class 'numpy.int64'>",
+                encoding="utf-8",
+                input="content",
+                lowercase=True,
+                max_df=1.0,
+                max_features=None,
+                min_df=1,
+                ngram_range=(1, 1),
+                preprocessor=None,
+                stop_words=None,
+                strip_accents=None,
+                token_pattern="(?u)\\b\\w\\w+\\b",
+                tokenizer=None,
+                vocabulary=None)
+
+print(cv.get_feature_names())
+
+# transforming the documents to vectors
+dt = cv.transform(more_sentences)
+
+## recover the former dtm
+print(pd.DataFrame(dt.toarray(), columns=cv.get_feature_names()))
+#+END_SRC
+
+* Blueprint: Calculating Similarities

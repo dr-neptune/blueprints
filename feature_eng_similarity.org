@@ -99,3 +99,179 @@ print(pd.DataFrame(tfidf_dt.toarray(),
 #+END_SRC
 
 * Introducing the ABC Dataset
+
+#+BEGIN_SRC python
+headlines = pd.read_csv('data/abcnews-date-text.csv')
+
+print(headlines.head())
+
+from sklearn.feature_extraction.text import TfidfVectorizer
+tfidf = TfidfVectorizer()
+dt = tfidf.fit_transform(headlines["headline_text"])
+#+END_SRC
+
+* Blueprint: Reducing Feature Dimensions
+
+#+BEGIN_SRC python
+from spacy.lang.en.stop_words import STOP_WORDS as stopwords
+
+print(len(stopwords))
+
+# with stopwords removed
+tfidf = TfidfVectorizer(stop_words=stopwords)
+dt = tfidf.fit_transform(headlines["headline_text"])
+dt
+
+# neglect all words occurring less than twice
+tfidf = TfidfVectorizer(stop_words=stopwords, min_df=2)
+dt = tfidf.fit_transform(headlines["headline_text"])
+dt
+
+# neglect all words not occurring in a fraction of the documents
+tfidf = TfidfVectorizer(stop_words=stopwords, min_df=0.0001)
+dt = tfidf.fit_transform(headlines["headline_text"])
+dt
+
+# remove all words that occur in at least 10% of the headlines
+tfidf = TfidfVectorizer(stop_words=stopwords, max_df=0.1)
+dt = tfidf.fit_transform(headlines["headline_text"])
+dt
+#+END_SRC
+
+* Blueprint: Improving Features by Making Them More Specific
+
+#+BEGIN_SRC python
+# we can keep just the lemmas in a headline
+import spacy
+
+nlp = spacy.load("en_core_web_sm")
+
+nouns_adjectives_verbs = ["NOUN", "PROPN", "ADJ", "ADV", "VERB"]
+
+for i, row in headlines.iterrows():
+    doc = nlp(str(row["headline_text"]))
+    headlines.at[i, "lemmas"] = " ".join([token.lemma_ for token in doc])
+    headlines.at[i, "nav"] = " ".join([token.lemma_ for token in doc
+                                       if token.pos_ in nouns_adjectives_verbs])
+
+print(headlines)
+#+END_SRC
+
+* Blueprint: Using Lemmas Instead of Words for Vectorizing Documents
+
+#+BEGIN_SRC python
+# now we can vectorize the data using the lemmas and see how the vocabulary decreased
+tfidf = TfidfVectorizer(stop_words=stopwords)
+dt = tfidf.fit_transform(headlines["lemmas"].map(str))
+print(dt)
+#+END_SRC
+
+* Blueprint: Limit Word Types
+
+#+BEGIN_SRC python
+# we can limit ourselves to considering just nouns, adjectives, verbs (removing prepositions, conjugations, etc)
+tfidf = TfidfVectorizer(stop_words=stopwords)
+dt = tfidf.fit_transform(headlines["nav"].map(str))
+print(dt)
+#+END_SRC
+
+* Blueprint: Remove Most Common Words
+
+#+BEGIN_SRC python
+top_10000 = pd.read_csv("https://raw.githubusercontent.com/first20hours/google-10000-english/master/google-10000-english-usa.txt")
+
+tfidf = TfidfVectorizer(stop_words=set(top_10000.iloc[:,0].values))
+dt = tfidf.fit_transform(headlines["nav"].map(str))
+print(dt)
+#+END_SRC
+
+* Blueprint: Adding Context via N-Grams
+
+#+BEGIN_SRC python
+# bigrams
+tfidf = TfidfVectorizer(stop_words=stopwords, ngram_range=(1,2), min_df=2)
+dt = tfidf.fit_transform(headlines["headline_text"])
+print(dt.shape)
+print(dt.data.nbytes)
+
+# trigrams
+tfidf = TfidfVectorizer(stop_words=stopwords, ngram_range=(1,3), min_df=2)
+dt = tfidf.fit_transform(headlines["headline_text"])
+print(dt.shape)
+print(dt.data.nbytes)
+
+# bigrams + top 10000 stop words + noun adjective verbs only
+tfidf = TfidfVectorizer(ngram_range=(1,2),
+                        stop_words=set(top_10000.iloc[:,0].values))
+dt = tfidf.fit_transform(headlines["nav"].map(str))
+print(dt)
+#+END_SRC
+
+* Syntactic Similarity in the ABC Dataset
+
+#+BEGIN_SRC python
+# there are test headlines in the corpus
+stopwords.add("test")
+tfidf = TfidfVectorizer(stop_words=stopwords, ngram_range=(1,2), min_df=2, norm='l2')
+dt = tfidf.fit_transform(headlines["headline_text"])
+#+END_SRC
+
+* Blueprint: Finding Most Similar Headlines to a Made-Up Headline
+
+#+BEGIN_SRC python
+# get closest headlines to the made up sample
+made_up = tfidf.transform(["australia and new zealand discuss optimal apple size"])
+
+sim = cosine_similarity(made_up, dt)
+
+headlines.iloc[np.argmax(sim)]
+#+END_SRC
+
+* Blueprint: Finding the Two Most Similar Documents in a Large Corpus (Much More Difficult)
+
+#+BEGIN_SRC python
+batch, max_sim = 10000, 0.0
+max_a, max_b = None, None
+
+for a in range(0, dt.shape[0], batch):
+    for b in range(0, a + batch, batch):
+        print(a, b)
+        r = np.dot(dt[a:a+batch],
+                   np.transpose(dt[b:b+batch]))
+        # eliminate identical vectors by setting their similarity to np.nan which gets sorted out
+        r[r > 0.9999] = np.nan
+        sim = r.max()
+        if sim > max_sim:
+            # argmax returns a single value which we have to map to 2 dimensions
+            (max_a, max_b) = np.unravel_index(np.argmax(r), r.shape)
+            # adjust offsets in corpus
+            max_a += a
+            max_b += b
+            max_sim = sim
+
+print(headlines.iloc[max_a])
+print(headlines.iloc[max_b])
+#+END_SRC
+
+* Blueprint: Finding Related Words
+
+#+BEGIN_SRC python
+# only consider words that appear at least 1000 times
+tfidf_word = TfidfVectorizer(stop_words=stopwords,
+                             min_df=1000)
+
+dt_word = tfidf_word.fit_transform(headlines["headline_text"])
+
+# vocab is small, so we can directly calculate cosine similarity
+r = cosine_similarity(dt_word.T, dt_word.T)
+np.fill_diagonal(r, 0)
+
+# find the largest entries by converting it to a 1D array, get idx of sorted elements via np.argsort, and restore the original indices for the vocabulary lookup
+voc = tfidf_word.get_feature_names()
+size = r.shape[0]  # quadratic
+for index in np.argsort(r.flatten())[::-1][0:40]:
+    a = int(index/size)
+    b = index % size
+    if a > b:  # avoid repetitions
+        print('"%s" related to "%s"' % (voc[a], voc[b]))
+#+END_SRC

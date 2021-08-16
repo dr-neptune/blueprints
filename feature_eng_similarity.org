@@ -3,95 +3,99 @@
 * Blueprint: Building Your Own Vectorizer
 
 #+BEGIN_SRC python
-# enumerating the vocabulary
 import pandas as pd
 import numpy as np
 
-sentences = ["It was the best of times",
-             "It was the worst of times",
-             "It was the age of wisdom",
-             "It was the age of foolishness"]
+# build a one-hot vectorizer
+sentences = ["it was the best of times",
+             "it was the worst of times",
+             "it was the age of wisdom",
+             "it was the age of foolishness"]
 
 tokenized_sentences = [[t for t in sentence.split()] for sentence in sentences]
-
-print(tokenized_sentences)
-
 vocabulary = set([w for s in tokenized_sentences for w in s])
 
-print(vocabulary)
+# make the dictionary
+print(pd.DataFrame([[w, i] for i, w in enumerate(vocabulary)]))
 
-print(pd.DataFrame([[w, i] for i,w in enumerate(vocabulary)]))
-
-# vectorizing documents
 def onehot_encode(tokenized_sentence):
     return [1 if w in tokenized_sentence else 0 for w in vocabulary]
 
+# get onehot encoded form of the sentences
 onehot = [onehot_encode(tokenized_sentence) for tokenized_sentence in tokenized_sentences]
 
 for (sentence, oh) in zip(sentences, onehot):
-    print("%s: %s" % (oh, sentence))
+    print('%s: %s' % (oh, sentence))
 
-# out of vocabulary documents
-print(onehot_encode("the age of wisdom is the best of times".split()))
-print(onehot_encode("John likes to watch movies. Mary likes movies too.".split()))
+# get the document term matrix
+dtm = pd.DataFrame(onehot, columns=vocabulary)
 
-# the document term matrix
-print("\n")
-print(pd.DataFrame(onehot, columns = vocabulary))
-
-# calculating similarities
+# calculate similarity
+# works by calculating the number of common 1s at the corresponding positions
 sim = [onehot[0][i] & onehot[1][i] for i in range(0, len(vocabulary))]
-sum(sim)
+print(sum(sim))
+
+# similarly, we could just take the dot product
 print(np.dot(onehot[0], onehot[1]))
 
-# the similarity matrix
+# generalized over all documents
 print(np.dot(onehot, np.transpose(onehot)))
+#+END_SRC
 
-# in sklearn
+* One-Hot Encoding with Scikit-Learn
+
+#+BEGIN_SRC python
 from sklearn.preprocessing import MultiLabelBinarizer
+
 lb = MultiLabelBinarizer()
 lb.fit([vocabulary])
 print(lb.transform(tokenized_sentences))
 #+END_SRC
 
-* Blueprint: Using sklearn's CountVectorizer
+* Bag-of-Words Models
 
 #+BEGIN_SRC python
+# using skl's CountVectorizer
 from sklearn.feature_extraction.text import CountVectorizer
 cv = CountVectorizer()
 
-more_sentences = sentences + \
-    ["John likes to watch movies. Mary likes movies too.",
-     "Mary also likes to watch football games."]
+more_sentences = sentences + ["John likes to watch movies. Mary likes movies too.",
+                              "Mary also likes to watch football games."]
 
-# fitting the vocabulary
+# learn about the vocabulary
 cv.fit(more_sentences)
-
-CountVectorizer(analyzer="word",
-                binary=False,
-                decode_error="strict",
-                dtype="<class 'numpy.int64'>",
-                encoding="utf-8",
-                input="content",
-                lowercase=True,
-                max_df=1.0,
-                max_features=None,
-                min_df=1,
-                ngram_range=(1, 1),
-                preprocessor=None,
-                stop_words=None,
-                strip_accents=None,
-                token_pattern="(?u)\\b\\w\\w+\\b",
-                tokenizer=None,
-                vocabulary=None)
 
 print(cv.get_feature_names())
 
-# transforming the documents to vectors
+# transform the documents to the vector representation
 dt = cv.transform(more_sentences)
 
-## recover the former dtm
+# convert it to a dataframe for ease of reading
 print(pd.DataFrame(dt.toarray(), columns=cv.get_feature_names()))
 #+END_SRC
 
 * Blueprint: Calculating Similarities
+
+In general, the number of occurrences of each word can be bigger, and we have to account for that. The dot product can not be used for this, as it is also sensitive to the length of the vector (the number of words in the documents). Also, a Euclidean distance is not very useful in high dimensional vector spaces. This is why most commonly the angle between document vectors is used as a measure of similarity.
+
+#+BEGIN_SRC python
+from sklearn.metrics.pairwise import cosine_similarity
+
+print(cosine_similarity(dt[0], dt[1]))
+
+# on a whole df
+print(pd.DataFrame(cosine_similarity(dt, dt)))
+#+END_SRC
+
+* Optimized Document Vectors with TF-IDFTransformer
+
+#+BEGIN_SRC python
+from sklearn.feature_extraction.text import TfidfTransformer
+
+tfidf = TfidfTransformer()
+tfidf_dt = tfidf.fit_transform(dt)
+print(pd.DataFrame(tfidf_dt.toarray(),
+                   columns=cv.get_feature_names()))
+#+END_SRC
+
+* Introducing the ABC Dataset

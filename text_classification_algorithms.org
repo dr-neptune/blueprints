@@ -346,5 +346,6 @@ print(result[result['actual'] != result['predicted']].sample(2))
     (report 'reporter)
     (preprocess 'SVC)
     (grid-search 'blueprint)
-    (evaluate ["accuracy" "precision" "recall"']))
+    (evaluate ["accuracy" "precision" "recall"'])
+    (report 'assessor))
 #+END_SRC

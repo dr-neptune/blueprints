@@ -1,0 +1,145 @@
+#+TITLE: Chapter 7: How to Explain a Text Classifier
+
+* Blueprint: Determining Classification Confidence Using Prediction Probability
+
+#+BEGIN_SRC python
+x_train_tf = tfidf.fit_transform(x_train).toarray()
+
+svc = SVC(kernel="linear", C=1, probability=True, random_state=42)
+svc.fit(x_train_tf, y_train)
+
+x_test_tf = tfidf.transform(x_test)
+y_pred = svc.predict(x_test_tf)
+
+result = pd.DataFrame({'text': x_test.values,
+                       'actual': y_test.values,
+                       'predicted': y_pred})
+
+print(result[result['actual'] != result['predicted']].head)
+
+# check specific result
+print(svc.predict_proba(x_test_tf[21]))
+
+# calculate decision probability for all documents in the test dataset
+class_names = ["APT", "Core", "Debug", "Doc", "Text", "UI"]
+prob = svc.predict_proba(x_test_tf)
+
+# new df for explainable results
+er = result.copy().reset_index()
+
+for c in enumerate(class_names):
+    er[c] = prob[:, i]
+
+# build 2 dfs, one with correct and the other with incorrect predictions
+er['max_proability'] = er[class_names].max(axis=1)
+correct = (er[er['actual'] == er['predicted']])
+wrong = (er[er['actual'] != er['predicted']])
+
+# plot it
+plt.subplot(2,1,1)
+correct['max_probability'].plot.hist(title="Correct")
+plt.subplot(2,2,1)
+wrong['max_probability'].plot.hist(title="Wrong")
+plt.show()
+
+# see if we can improve results by only considering decisions that have been made with a probability > 80%
+high = er[er['max_probability'] > 0.8]
+print(classification_report(high['actual'], high['predicted']))  # only high
+print(classification_report(er['actual'], er['predicted']))  # original
+#+END_SRC
+
+* Blueprint: Measuring Feature Importance of Predictive Models
+
+#+BEGIN_SRC python
+# get the necessary parameters
+print(svc.coef_)
+
+# look more closely at Core
+c = svc.coef_
+coef = (c[5] + c[6] + c[7] + c[8] - c[0]).A[0]  # A[0] converts a matrix to an array and takes the first row
+vocabulary_positions = coef.argsort()
+vocabulary = tfidf.get_feature_names()
+
+# take top positive and negative contributions
+top_words = 20
+top_positive_coef = vocabulary_positions[-top_words:].tolist()
+top_negative_coef = vocabulary_positions[top_words:].tolist()
+
+core = pd.DataFrame([[vocabulary[c], coef[c]] for c in top_positive_coef + top_negative_coef],
+                       columns=['feature', 'coefficient']).sort_values('coefficient')
+
+core.set_index('feature').plot.barh(figsize=(6,10), color=[['red']*top_words + ['green']*top_words])
+plt.show()
+#+END_SRC
+
+* Blueprint: Using LIME to Explain the Classification Results
+
+LIME is an acronym for "Local Interpretable Model-Agnostic Explanations". It works locally by taking a look at each prediction separately.
+
+#+BEGIN_SRC python
+# LIME wants text as input and classification probabilities as output
+# so we arrange the vectorizer and classifier in a pipeline
+from sklearn.pipeline import make_pipeline
+pipeline = make_pipeline(tfidf, best_model)
+
+# test that our pipeline can make a prediction
+pipeline.predict_proba(['compiler not working'])
+
+from lime.lime_text import LimeTextExplainer
+explainer = LimeTextExplainer(class_names=class_names)
+
+# look again at the wrongly predicted results
+print(wrong.head(5))
+
+# take a look at corresponding row
+id = 21
+print('Document ID: %d', % id)
+print('Predicted Class =', er.iloc[id]['predicted'])
+print('True Class: %s' % er.iloc[id]['actual'])
+
+# have LIME explain it
+exp = explainer.explain_instance(result.iloc[id]['text'],
+                                 pipeline.predict_proba, num_features=10, labels=[1,5])
+
+print('Explanation for Class %s' % class_names[1])
+print('\n'.join(map(str, exp.as_list(label=1))))
+print('\n')
+print('Explanation for Class %s' % class_names[5])
+print('\n'.join(map(str, exp.as_list(label=5))))
+
+# create a graphic representation of specific words
+exp = explainer.explain_instance(result.iloc[id]['text'],
+                                 pipeline.predict_proba, num_features=6, top_labels=3)
+exp.show_in_notebook(text=False)
+plt.show()
+#+END_SRC
+
+
+LIME can even support us in finding representative samples that help us interpret the model performance as a whole
+
+#+BEGIN_SRC python
+from lime import submodular_pick
+import numpy as np
+np.random.seed(42)
+
+lsm = submodular_pick.SubmodulePick(explainer,
+                                    er['text'].values,
+                                    pipeline.predict_proba,
+                                    sample_size=100,
+                                    num_features=20,
+                                    num_exps_desired=5)
+
+lsm.explanations[0].show_in_notebook()
+#+END_SRC
+
+* Blueprint: Using ELI5 to Explain the Classification Results
+
+ELI5 is another libarary for ML explanation also using the LIME algorithm.
+It needs a model trained with libsvm.
+
+#+BEGIN_SRC python
+from sklearn.linear_model import SDGClassifier
+
+
+
+#+END_SRC

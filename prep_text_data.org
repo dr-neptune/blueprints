@@ -122,6 +122,7 @@ print(count_words(df, column = "text", preprocess=lambda t: re.findall(r"<[\w/]*
 import html
 
 def clean(text):
+    import html
     # convert HTML escapes like &amp; to characters
     text = html.unescape(text)
 

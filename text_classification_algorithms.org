@@ -1,1 +1,350 @@
 #+TITLE: Chapter 6: Text Classification Algorithms
+
+#+BEGIN_SRC python
+import pandas as pd
+import matplotlib.pyplot as plt
+from sklearn.feature_extraction.text import TfidfTransformer, TfidfVectorizer
+
+df = pd.read_csv('data/eclipse_jdt.csv')
+
+print(df.iloc[0].T)
+print(df.sample(1).T)
+
+p1 = df['Priority'].value_counts().sort_index().plot(kind='bar')
+plt.show()
+
+print(df['Component'].value_counts())
+#+END_SRC
+
+* Blueprint: Building a Text Classification System
+
+
+#+BEGIN_SRC python
+# helper function
+def clean(text):
+    import html
+    import re
+    # convert HTML escapes like &amp; to characters
+    text = html.unescape(text)
+
+    # chain of re.subs
+    replacements = [
+        # tags like <tab>, <lb>
+        (r"<[^<>]*>", " "),
+        # markdown URLs like [some text](https://...)
+        (r"\[([^\[\]]*)\]\([^\(\)]*\)", r"\1"),
+        # text or code in brackets like [0]
+        (r"\[[^\[\]]*\]", " "),
+        # standalone sequences of specials, matches &# but not #word
+        (r"(?:^|\s)[&#<>{}\[\]+|\\:-]{1,}(?:\s|$)", " "),
+        # standalone sequences of hyphens like --- or ==
+        (r"(?:^|\s)[\-=\+]{2,}(?:\s|$)", " "),
+        # sequences of white space
+        (r"\s+", " ")
+    ]
+
+    # run through all the replacements
+    for pattern, replacement in replacements:
+        text = re.sub(pattern, replacement, text)
+
+    return text.strip()
+#+END_SRC
+
+** Part 1: Data Preparation
+
+#+BEGIN_SRC python
+df = df[['Title', 'Description', 'Priority']]
+df = df.dropna()
+
+df['text'] = df['Title'] + ' ' + df['Description']
+df = df.drop(columns=['Title', 'Description'])
+
+df['text'] = df['text'].apply(clean)
+
+print(df[df['text'].str.len() > 50].sample(2))
+#+END_SRC
+
+** Part 2: Train-Test Split
+
+#+BEGIN_SRC python
+from sklearn.model_selection import train_test_split
+
+x_train, x_test, y_train, y_test = train_test_split(df['text'],
+                                                    df['Priority'],
+                                                    test_size=0.2,
+                                                    random_state=42,
+                                                    stratify=df['Priority'])
+
+print('Size of Training Data:\t', x_train.shape[0])
+print('Size of Test Data:\t', x_test.shape[0])
+#+END_SRC
+
+** Part 3: Training the Model
+
+#+BEGIN_SRC python
+from sklearn.svm import LinearSVC
+
+# prepare data for SVM
+tfidf = TfidfVectorizer(min_df=10, ngram_range=(1,2), stop_words='english')
+x_train_tf = tfidf.fit_transform(x_train)
+
+# fit linear SVM
+linmod = LinearSVC(random_state=0, tol=1e-5)
+linmod.fit(x_train_tf, y_train)
+#+END_SRC
+
+** Part 4: Model Evaluation
+
+#+BEGIN_SRC python
+from sklearn.metrics import accuracy_score
+
+x_test_tf = tfidf.transform(x_test)
+y_pred = linmod.predict(x_test_tf)
+print('Accuracy:\t', accuracy_score(y_test, y_pred))
+#+END_SRC
+
+Compare to baseline
+
+#+BEGIN_SRC python
+from sklearn.dummy import DummyClassifier
+
+clf = DummyClassifier(strategy='most_frequent')
+clf.fit(x_train, y_train)
+y_pred_baseline = clf.predict(x_test)
+print('Accuracy:\t', accuracy_score(y_test, y_pred_baseline))
+#+END_SRC
+
+Check with a confusion matrix
+
+#+BEGIN_SRC python
+from sklearn.metrics import confusion_matrix, plot_confusion_matrix, classification_report
+
+y_pred = linmod.predict(x_test_tf)
+
+print(confusion_matrix(y_test, y_pred))
+
+plot_confusion_matrix(linmod,
+                      x_test_tf,
+                      y_test,
+                      values_format='d',
+                      cmap=plt.cm.Blues)
+plt.show()
+
+print(classification_report(y_test, y_pred))
+#+END_SRC
+
+** Part 5: Deal with Class Imbalance
+
+We will use downsampling.
+
+#+BEGIN_SRC python
+# filter bug reports with priority P3 and sample 4k rows from it
+df_sampleP3 = df[df['Priority'] == 'P3'].sample(n=4000)
+
+# create a separate dataframe containing all other bug reports
+df_sampleRest = df[df['Priority'] != 'P3']
+
+# concatenate to create a new 'balanced' bug reports dataset
+df_bal = pd.concat([df_sampleRest, df_sampleP3])
+
+# check the status of the class imbalance
+print(df_bal['Priority'].value_counts())
+#+END_SRC
+
+* Final Blueprint for Text Classification
+
+#+BEGIN_SRC python
+df = df_bal[['text', 'Priority']]
+df = df.dropna()
+
+# step 1 - data prep
+df['text'] = df['text'].apply(clean)
+
+# step 2 - train test split
+x_train, x_test, y_train, y_test = train_test_split(df['text'],
+                                                    df['Priority'],
+                                                    test_size=0.2,
+                                                    random_state=42,
+                                                    stratify=df['Priority'])
+
+print('Size of Training Data:\t', x_train.shape[0])
+print('Size of Test Data:\t', x_test.shape[0])
+
+# step 3 - training the ml model
+tfidf = TfidfVectorizer(min_df=10, ngram_range=(1,2), stop_words='english')
+x_train_tf = tfidf.fit_transform(x_train)
+
+linmod = LinearSVC(random_state=0, tol=1e-5)
+linmod.fit(x_train_tf, y_train)
+
+# step 4 - model evaluation
+x_test_tf = tfidf.transform(x_test)
+y_pred = linmod.predict(x_test_tf)
+print('Accuracy:\t', accuracy_score(y_test, y_pred))
+print(classification_report(y_test, y_pred))
+
+# step 5 - test against baseline
+clf = DummyClassifier(strategy='stratified')
+clf.fit(x_train, y_train)
+y_pred_baseline = clf.predict(x_test)
+print('Accuracy:\t', accuracy_score(y_test, y_pred_baseline))
+print(classification_report(y_test, y_pred))
+#+END_SRC
+
+* Blueprint: Using Cross-Validation to Estimate Realistic Accuracy Metrics
+
+#+BEGIN_SRC python
+from sklearn.model_selection import cross_val_score
+
+tfidf = TfidfVectorizer(min_df=10, ngram_range=(1,2), stop_words='english')
+df_tf = tfidf.fit_transform(df['text']).toarray()
+
+# 5-fold cv
+scores = cross_val_score(estimator=linmod,
+                         X=df_tf,
+                         y=df['Priority'],
+                         cv=5)
+
+print("Validation Scores:\t", scores)
+print("Mean Validation Score:\t", scores.mean())
+print("StdDev Validation Score:\t", scores.std())
+#+END_SRC
+
+* Blueprint: Performing Hyperparameter Tuning with Grid Search
+
+#+BEGIN_SRC python
+from sklearn.pipeline import Pipeline
+from sklearn.model_selection import GridSearchCV
+
+training_pipeline = Pipeline(
+    steps=[('tfidf', TfidfVectorizer(stop_words='english')),
+           ('model', LinearSVC(random_state=42, tol=1e-5))]
+)
+
+grid_param = [{
+    'tfidf__min_df': [5, 10],
+    'tfidf__ngram_range': [(1, 3), (1, 6)],
+    'model__penalty': ['l2'],
+    'model__loss': ['hinge'],
+    'model__max_iter': [10000]
+}, {
+    'tfidf__min_df': [5, 10],
+    'tfidf__ngram_range': [(1, 3), (1, 6)],
+    'model__C': [1, 10],
+    'model__tol': [1e-2, 1e-3]
+}]
+
+grid_search_processor = GridSearchCV(estimator=training_pipeline,
+                                     param_grid=grid_param,
+                                     cv=5)
+grid_search_processor.fit(df['text'], df['Priority'])
+
+best_params = grid_search_processor.best_params_
+print("Best alpha param:\t", best_params)
+best_result = grid_search_processor.best_score_
+print("Best result:\t", best_result)
+
+# get top 5 models and param config
+gridsearch_results = pd.DataFrame(grid_search_processor.cv_results_)
+print(gridsearch_results[['rank_test_score', 'mean_test_score', 'params']].sort_values(by=['rank_test_score'])[:5])
+#+END_SRC
+
+* Blueprint Recap and Conclusion
+
+#+BEGIN_SRC python
+from sklearn.svm import SVC
+
+# flag that determines the choice of SVC and LinearSVC
+runSVC = True
+
+# loading the dataframe
+df = pd.read_csv('data/eclipse_jdt.csv')
+df = df[['Title', 'Description', 'Component']]
+df = df.dropna()
+df['text'] = df['Title'] + df['Description']
+df = df.drop(columns=['Title', 'Description'])
+
+# Step 1 : Data Prep
+df['text'] = df['text'].apply(clean)
+df = df[df[text].str.len() > 50]
+
+if runSVC:
+    # sample the data when running SVC to cut runtimes
+    df = df.groupby('Component', as_index=False).apply(pd.DataFrame.sample, random_state=21, frac=.2)
+
+# Step 2 : Train / Test Split
+x_train, x_test, y_train, y_test = train_test_split(df['text'], df['Component'],
+                                                    test_size=0.2, stratify=df['Component'])
+
+print('Size of Training Data:\t', x_train.shape[0])
+print('Size of Test Data:\t', x_test.shape[0])
+
+# Step 3 : Training the ML model
+tfidf = TfidfVectorizer(stop_words='english')
+
+if runSVC:
+    model = SVC(random_state=42, probability=True)
+    grid_param = [{
+        'tfidf__min_df': [5, 10],
+        'tfidf__ngram_range': [(1,3), (1,6)],
+        'model__C': [1, 100],
+        'model__kernel': ['linear']
+    }]
+else:
+    model = LinearSVC(random_state=42, tol=1e-5)
+    grid_param = [{
+        'tfidf__min_df': [5, 10],
+        'tfidf__ngram_range': [(1,3), (1,6)],
+        'model__C': [1, 100],
+        'model__loss': ['hinge']
+    }]
+
+training_pipeline = Pipeline(
+    steps=[('tfidf', TfidfVectorizer(stop_words='english')),
+           ('model', model)]
+)
+
+gsp = GridSearchCV(estimator=training_pipeline,
+                   param_grid=grid_param,
+                   cv=5)
+
+gsp.fit(x_train, y_train)
+
+best_params = gsp.best_params_
+print("Best alpha param:\t", best_params)
+best_result = grid_search_processor.best_score_
+print("Best result:\t", best_result)
+
+# Step 4 : Model Evaluation
+best_model = gsp.best_estimator_
+
+y_pred = best_model.predict(x_test)
+print("Accuracy:\t", accuracy_score(y_test, y_pred))
+print(classification_report(y_test, y_pred))
+
+# Step 5 : Compare Baseline
+clf = DummyClassifier(strategy='most_frequent')
+clf.fit(x_train, y_train)
+y_pred_baseline = clf.predict(x_test)
+print("Accuracy Score:\t", accuracy_score(y_test, y_pred_baseline))
+
+# Step 6 : Check Model Boundaries
+frame = {'text': x_test,
+         'actual': y_test,
+         'predicted': y_pred}
+result = pd.DataFrame(frame)
+
+print(result[result['actual'] == result['predicted']].sample(2))
+print(result[result['actual'] != result['predicted']].sample(2))
+#+END_SRC
+
+#+BEGIN_SRC racket
+; ideal ml pipeline
+(-> (load-data 'data/example_data.csv')
+    (split [["text" "component"] 0.2])
+    (clean "text")
+    (report 'reporter)
+    (preprocess 'SVC)
+    (grid-search 'blueprint)
+    (evaluate ["accuracy" "precision" "recall"']))
+#+END_SRC

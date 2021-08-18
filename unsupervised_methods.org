@@ -1,1 +1,68 @@
 #+TITLE: Chapter 8: Unsupervised Methods: Topic Modeling and Clustering
+
+* Out Dataset: UN General Debates
+
+#+BEGIN_SRC python
+import pandas as pd
+import re
+import matplotlib.pyplot as plt
+
+
+df = pd.read_csv('data/un-debates.csv')
+print(df.info())
+
+# clean up
+df['paragraphs'] = df['text'].map(lambda text: re.split('[.?!]\s*\n', text))
+df['number_of_paragraphs'] = df['paragraphs'].map(len)
+
+df.groupby('year').agg({'number_of_paragraphs': 'mean'}).plot.bar()
+plt.show()
+#+END_SRC
+
+* Preparations
+
+We will be semantically analyzing the corpus of the UN general debates.
+
+#+BEGIN_SRC python
+from sklearn.feature_extraction.text import TfidfVectorizer
+from spacy.lang.en.stop_words import STOP_WORDS as stopwords
+
+# calculate DTM with bigrams
+tfidf_text = TfidfVectorizer(stop_words=stopwords, min_df=5, max_df=0.7)
+vectors_text = tfidf_text.fit_transform(df['text'])
+print(vectors_text.shape)
+
+# flatten the paragraphs keeping the years
+paragraph_df = pd.DataFrame([{'text': paragraph,
+                              'year': year} for paragraphs, year in zip(df['paragraphs'], df['year']) for paragraph in paragraphs if paragraph])
+
+tfidf_para_vectorizer = TfidfVectorizer(stop_words=stopwords, min_df=5, max_df=0.7)
+tfidf_para_vectors = tfidf_para_vectorizer.fit_transform(paragraph_df['text'])
+print(tfidf_para_vectors.shape)
+#+END_SRC
+
+* Non-negative Matrix Factorization (NMF)
+
+#+BEGIN_SRC python
+from sklearn.decomposition import NMF
+
+nmf_text_model = NMF(n_components=10, random_state=42, max_iter=5000)
+W_text_matrix = nmf_text_model.fit_transform(vectors_text)
+H_text_matrix = nmf_text_model.components_
+
+def display_topics(model, features, n_top_words=5):
+    for topic, word_vector in enumerate(model.components_):
+        total = word_vector.sum()
+        largest = word_vector.argsort()[::-1]
+        print("\nTopic %02d" % topic)
+        for i in range(0, n_top_words):
+            print("%s (%2.2f)" % (features[largest[i]], word_vector[largest[i]] * 100.0 / total))
+
+display_topics(nmf_text_model,
+               tfidf_text.get_feature_names())
+
+# check how many documents could be assigned mainly to each topic
+print(W_text_matrix.sum(axis=0) / W_text_matrix.sum() * 100.0)
+#+END_SRC
+
+* Blueprint: Creating a Topic Model for Paragraphs Using NMF

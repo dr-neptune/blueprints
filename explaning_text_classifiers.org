@@ -3,7 +3,7 @@
 * Blueprint: Determining Classification Confidence Using Prediction Probability
 
 #+BEGIN_SRC python
-x_train_tf = tfidf.fit_transform(x_train).toarray()
+x_train_tf = tfidf.fit_transform(x_train)
 
 svc = SVC(kernel="linear", C=1, probability=True, random_state=42)
 svc.fit(x_train_tf, y_train)
@@ -21,13 +21,13 @@ print(result[result['actual'] != result['predicted']].head)
 print(svc.predict_proba(x_test_tf[21]))
 
 # calculate decision probability for all documents in the test dataset
-class_names = ["APT", "Core", "Debug", "Doc", "Text", "UI"]
+class_names = ["Core", "Debug", "Doc", "Text", "UI"]
 prob = svc.predict_proba(x_test_tf)
 
 # new df for explainable results
 er = result.copy().reset_index()
 
-for c in enumerate(class_names):
+for i, c in enumerate(class_names):
     er[c] = prob[:, i]
 
 # build 2 dfs, one with correct and the other with incorrect predictions
@@ -122,12 +122,12 @@ from lime import submodular_pick
 import numpy as np
 np.random.seed(42)
 
-lsm = submodular_pick.SubmodulePick(explainer,
-                                    er['text'].values,
-                                    pipeline.predict_proba,
-                                    sample_size=100,
-                                    num_features=20,
-                                    num_exps_desired=5)
+lsm = submodular_pick.SubmodularPick(explainer,
+                                     er['text'].values,
+                                     pipeline.predict_proba,
+                                     sample_size=100,
+                                     num_features=20,
+                                     num_exps_desired=5)
 
 lsm.explanations[0].show_in_notebook()
 #+END_SRC
@@ -138,8 +138,37 @@ ELI5 is another libarary for ML explanation also using the LIME algorithm.
 It needs a model trained with libsvm.
 
 #+BEGIN_SRC python
-from sklearn.linear_model import SDGClassifier
+from sklearn.linear_model import SGDClassifier
+svm = SGDClassifier(loss='hinge', max_iter=1000, tol=1e-3, random_state=42)
+svm.fit(x_train_tf, y_train)
+y_pred_svm = svm.predict(x_test_tf)
+print(classification_report(y_test, y_pred_svm))
 
+import eli5
 
+print(eli5.format_as_image(eli5.show_weights(svm, top=10, vec=tfidf, target_names=class_names[:-1])))
+#+END_SRC
 
+* Blueprint: Using Anchor to Explain the Classification Results
+
+Like LIME, Anchor is model agnostic and works for any black-box model. It creates rules (anchors) which explain the behavior of the model.
+
+#+BEGIN_SRC python
+from anchor.anchor_text import AnchorText
+import spacy
+
+nlp = spacy.load("en_core_web_lg")
+
+np.random.seed(42)
+
+explainer_unk = AnchorText(nlp, class_names, use_unk_distribution=False, use_bert=False)
+
+text = er.iloc[21]['text']
+actual = er.iloc[21]['actual']
+
+# we want the class with the highest probability and must invert the order
+predicted_class_ids = np.argsort(pipeline.predict_proba([text])[0])[::-1]
+
+# ugh, how frustrating this chapter has been.
+# most things just aren't working. The stuff that is takes forever to run
 #+END_SRC

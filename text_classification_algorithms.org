@@ -258,7 +258,7 @@ from sklearn.svm import SVC
 runSVC = True
 
 # loading the dataframe
-df = pd.read_csv('data/eclipse_jdt.csv')
+df = pd.read_csv('data/eclipse_jdt.csv').iloc[0:2500]
 df = df[['Title', 'Description', 'Component']]
 df = df.dropna()
 df['text'] = df['Title'] + df['Description']
@@ -266,7 +266,7 @@ df = df.drop(columns=['Title', 'Description'])
 
 # Step 1 : Data Prep
 df['text'] = df['text'].apply(clean)
-df = df[df[text].str.len() > 50]
+df = df[df['text'].str.len() > 50]
 
 if runSVC:
     # sample the data when running SVC to cut runtimes

@@ -81,4 +81,29 @@ for i in range(0, len(sentences)):
 
 #+END_SRC
 
-#+RESULTS:
+* Latent Semantic Analysis
+
+LSA assumes that words that are close in meaning will occur in the same documents.
+We essentially do a Non-negative Matrix Factorization and then generate the summary by choosing the
+top N important topics and then picking the most important sentences for each of these topics to form our summary.
+
+#+BEGIN_SRC python
+from sumy.parsers.plaintext import PlaintextParser
+from sumy.nlp.tokenizers import Tokenizer
+from sumy.nlp.stemmers import Stemmer
+from sumy.utils import get_stop_words
+from sumy.summarizers.lsa import LsaSummarizer
+
+LANGUAGE = 'english'
+stemmer = Stemmer(LANGUAGE)
+parser = PlaintextParser.from_string(article1['text'],
+                                     Tokenizer(LANGUAGE))
+summarizer = LsaSummarizer(stemmer)
+summarizer.stop_words = get_stop_words(LANGUAGE)
+
+for sentence in summarizer(parser.document,
+                           num_summary_sentence):
+    print(str(sentence))
+#+END_SRC
+
+* Blueprint: Summarizing Text Using an Indicator Representation

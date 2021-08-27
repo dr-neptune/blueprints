@@ -1,1 +1,84 @@
 #+TITLE: Chapter 9: Text Summarization
+
+* Extractive Methods
+
+All extractive methods follow 3 basic steps:
+1. Create an intermediate representation of the text
+2. Score the sentences/phrases based on the chosen representation
+3. Rank and choose sentences to create a summary of the text
+
+* Data Preprocessing
+
+#+BEGIN_SRC python
+from bs4 import BeautifulSoup
+import reprlib
+import requests
+import os
+import re
+
+
+r = reprlib.Repr()
+r.maxstring = 800
+
+url1 = "https://www.reuters.com/article/us-qualcomm-m-a-broadcom-5g/what-is-5g-and-who-are-the-major-players-idUSKCN1GR1IN"
+
+def download_article(url):
+    # check if article already there
+    fname = url.split("/")[-1] + ".html"
+    if not os.path.isfile(fname):
+        r = requests.get(url)
+        with open(fname, "w+") as f:
+            f.write(r.text)
+    return fname
+
+def parse_article(article_file):
+    with open(article_file, "r") as f:
+        html = f.read()
+    r = {}
+    soup = BeautifulSoup(html, "html.parser")
+    r["url"] = soup.find("link", {"rel": "canonical"})["href"]
+    r["headline"] = soup.h1.text
+    r["text"] = soup.select_one("div.ArticleBodyWrapper").text
+
+    # clean up sentence endings
+    r["text"] = re.sub("\\.", ". ", r["text"])
+    r["text"] = re.sub("\\?", "? ", r["text"])
+
+    return r
+
+article_name1 = download_article(url1)
+
+print(article_name1)
+
+article1 = parse_article(article_name1)
+
+#+END_SRC
+
+* Identifying Important Words with TF-IDF Values
+
+#+BEGIN_SRC python
+from sklearn.feature_extraction.text import TfidfVectorizer
+from nltk import tokenize
+import numpy as np
+
+
+sentences = tokenize.sent_tokenize(article1['text'])
+tfidfVectorizer = TfidfVectorizer()
+words_tfidf = tfidfVectorizer.fit_transform(sentences)
+
+# param to specify # of summary sentences required
+num_summary_sentence = 3
+
+# sort the sentences in descending order by the sum of TFIDF values
+sent_sum = words_tfidf.sum(axis=1)
+important_sent = np.argsort(sent_sum, axis=0)[::-1]
+
+# print 3 most important sentences in the order they appear in article
+for i in range(0, len(sentences)):
+    if i in important_sent[:num_summary_sentence]:
+        print(f"\n\nSentence {i}\n\n")
+        print(sentences[i])
+
+#+END_SRC
+
+#+RESULTS:

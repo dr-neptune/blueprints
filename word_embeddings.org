@@ -1,0 +1,224 @@
+#+TITLE: Chapter 10: Exploring Semantic Relationships with Word Embeddings
+
+* Blueprint: Using Similarity Queries on Pretrained Models
+
+#+BEGIN_SRC python
+import gensim.downloader as api
+import os
+os.environ['GENSIM_DATA_DIR'] = './models'
+
+# take a look at available models
+info_df = pd.DataFrame.from_dict(api.info()['models'], orient='index')
+print(info_df[['file_size', 'base_dataset', 'parameters']].head())
+
+# load the model
+model = api.load("glove-wiki-gigaword-50")
+#+END_SRC
+
+** Similarity Queries
+
+#+BEGIN_SRC python
+v_king = model['king']
+v_queen = model['queen']
+
+print('\n')
+print("Vector Size:\t", model.vector_size)
+print("v_king:\t", v_king[:10])
+print("v_queen:\t", v_queen[:10])
+print("similarity:\t", model.similarity('king', 'queen'))
+
+# get words most similar to
+print(model.most_similar('king', topn=3))
+
+print(model.cosine_similarities(model['king'], [model['queen'],
+                                                model['lion'],
+                                                model['nanotechnology']]))
+
+print(model.most_similar(positive = ['woman', 'king'],
+                         negative = ['man'],
+                         topn=3))
+
+print(model.most_similar(positive=['paris', 'germany'],
+                         negative=['france'],
+                         topn=3))
+
+# find the sum of france and capital
+print(model.most_similar(positive=['france', 'capital'], topn=1))
+#+END_SRC
+
+* Blueprints for Training and Evaluating Your Own Embeddings
+
+#+BEGIN_SRC python
+import sqlite3
+from gensim.models.phrases import Phrases, npmi_scorer
+
+db_name = 'reddit-selfposts.db'
+con = sqlite3.connect(db_name)
+df = pd.read_sql("select subreddit, lemmas, text from posts_nlp", con)
+con.close()
+
+df['lemmas'] = df['lemmas'].str.lower().str.split()  # lowercase tokens
+sents = df['lemmas']  # our training "sentences"
+
+phrases = Phrases(sents,
+                  min_count=10,
+                  threshold=0.3,
+                  delimiter='-',
+                  scoring=npmi_scorer)
+
+# identify compound words
+sent = "I had to replace the timing belt in my mercedes c300".split()
+phrased = phrases[sent]
+print('|'.join(phrased))
+
+phrase_df = pd.DataFrame(phrases.export_phrases(), index=sents)
+#+END_SRC
+
+* Blueprint: Training Models with Gensim
+
+#+BEGIN_SRC python
+from gensim.models import Word2Vec, FastText
+
+model = Word2Vec(sents)
+
+model.save('./models/autos_w2v_100_2_full.bin')
+
+model_path = './models'
+model_prefix = 'autos'
+
+param_grid = {'w2v': {'variant': ['cbow', 'sg'],
+                      'window': [2, 5, 30]},
+              'ft': {'variant': ['sg'],
+                     'window': [5]}}
+
+size = 100
+
+for algo, params in param_grid.items():
+    for variant in params['variant']:
+        sg = 1 if variant == 'sg' else 0
+        for window in params['window']:
+            if algo == 'w2v':
+                model = Word2Vec(sents, window=window, sg=sg)
+            else:
+                model = FastText(sents, window=window, sg=sg)
+
+            file_name = f"{model_path}/{model_prefix}_{algo}_{variant}_{window}"
+            print(f"now saving to {file_name}")
+            model.wv.save_word2vec_format(file_name + '.bin', binary=True)
+#+END_SRC
+
+* Blueprint: Evaluating Different Models
+
+#+BEGIN_SRC python
+from gensim.models import KeyedVectors
+
+names = ['autos_w2v_cbow_2',
+         'autos_w2v_cbow_5',
+         'autos_w2v_cbow_30',
+         'autos_w2v_sg_2',
+         'autos_w2v_sg_5',
+         'autos_w2v_sg_30',
+         'autos_ft_sg_5']
+
+models = {}
+
+for name in names:
+    file_name = f"{model_path}/{name}.bin"
+    models[name] = KeyedVectors.load_word2vec_format(file_name, binary=True)
+
+def compare_models(models, **kwargs):
+    df = pd.DataFrame()
+    for name, model in models:
+        df[name] = [f"{word} {score:.3f}" for word, score in model.most_similar(**kwargs)]
+    df.index = df.index + 1
+    return df
+
+# check words most similar to BMW
+print('\n')
+print(compare_models([(n, models[n]) for n in names], positive='bmw', topn=10))
+
+# find analogy
+# what is to toyota as f150 is to ford?
+print(compare_models([(n, models[n]) for n in names],
+                     positive=['f150', 'toyota'],
+                     negative=['ford'],
+                     topn=5).T)
+#+END_SRC
+
+* Visualizing Embeddings
+
+* Blueprint: Applying Dimensionality Reduction
+
+#+BEGIN_SRC python
+from umap import UMAP
+import plotly.express as px
+
+model = models['autos_w2v_sg_30']
+words = model.key_to_index
+wv = [model[word] for word in words]
+
+reducer = UMAP(n_components=2,
+               metric='cosine',
+               n_neighbors=15,
+               min_dist=0.1)
+
+reduced_wv = reducer.fit_transform(wv)
+
+# plotly plot
+plot_df = pd.DataFrame.from_records(reduced_wv, columns=['x', 'y'])
+plot_df['word'] = words
+params = {'hover_data': {c: False for c in plot_df.columns},
+          'hover_name': 'word'}
+fig = px.scatter(plot_df, x='x', y='y', opacity=0.3, size_max=3, **params)
+fig.show()
+#+END_SRC
+
+* Blueprint: Constructing a Similarity Tree
+
+#+BEGIN_SRC python
+import networkx as nx
+from networkx.drawing.nx_pydot import graphviz_layout
+from collections import deque
+
+
+
+def sim_tree(model, word, top_n, max_dist):
+    graph = nx.Graph()
+    graph.add_node(word, dist=0)
+    to_visit = deque([word])
+
+    while len(to_visit) > 0:
+        source = to_visit.popleft()  # visit next node
+        dist = graph.nodes[source]['dist'] + 1
+
+        if dist <= max_dist:  # discover new nodes
+            for target, sim in model.most_similar(source, topn=top_n):
+                if target not in graph:
+                    to_visit.append(target)
+                    graph.add_node(target, dist=dist)
+                    graph.add_edge(source, target, sim=sim, dist=dist)
+    return graph
+
+def plot_tree(graph, node_size=1000, font_size=12):
+    pos = graphviz_layout(graph, prog='twopi', root=list(graph.nodes)[0])
+    colors = [graph.nodes[n]['dist'] for n in graph]  # colorize by distance
+    nx.draw_networkx_nodes(graph, pos,
+                           node_size=node_size,
+                           node_color=colors,
+                           cmap='Set1',
+                           alpha=0.4)
+    nx.draw_networkx_labels(graph, pos, font_size=font_size)
+
+    for (n1, n2, sim) in graph.edges(data='sim'):
+        nx.draw_networkx_edges(graph, pos, [(n1, n2)], width=sim, alpha=0.2)
+
+    plt.show()
+
+model = models['autos_w2v_sg_2']
+graph = sim_tree(model, 'noise', top_n=10, max_dist=3)
+plot_tree(graph, node_size=500, font_size=8)
+
+model = models['autos_w2v_sg_30']
+graph = sim_tree(model, 'sparkplug', top_n=8, max_dist=2)
+plot_tree(graph, node_size=500, font_size=8)
+#+END_SRC

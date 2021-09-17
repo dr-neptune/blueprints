@@ -1,0 +1,379 @@
+#+TITLE: Chapter 12: Building a Knowledge Graph
+
+#+BEGIN_SRC python
+import nltk
+nltk.download('reuters')
+from nltk.corpus import reuters
+
+df = pd.DataFrame(reuters.fileids('acq'), columns=['fileid'])
+df['raw'] = df['fileid'].map(lambda f: reuters.raw(f))
+df.index = df['fileid'].map(lambda f: int(f.split('/')[1]))
+df.index.name = None
+df = df.drop(columns=['fileid']).sort_index()
+
+print(df.sample(3, random_state=42))
+
+df[['headline', 'raw_text']] = df.apply(lambda row: row['raw'].split('\n', 1),
+                                        axis='columns', result_type='expand')
+
+def clean(text):
+    text = text.replace('&lt;','<') # html escape
+    text = re.sub(r'[<>]', '"', text) # quotation marks instead of <>
+    text = re.sub(r'[ ]*"[A-Z\.]+"', '', text) # drop stock symbols
+    text = re.sub(r'[ ]*\([A-Z\.]+\)', '', text) # drop stock symbols
+    text = re.sub(r'\bdlr(s?)\b', r'dollar\1', text, flags=re.I)
+    text = re.sub(r'\bmln(s?)\b', r'million\1', text, flags=re.I)
+    text = re.sub(r'\bpct\b', r'%', text, flags=re.I)
+    # normalize INC to Inc
+    text = re.sub(r'\b(Co|Corp|Inc|Plc|Ltd)\b', lambda m: m.expand(r'\1').capitalize(), text, flags=re.I)
+    text = re.sub(r'"', r'', text) # quotation marks
+    text = re.sub(r'\s+', ' ', text) # multiple whitespace by one
+    text = re.sub(r'acquisiton', 'acquisition', text) # typo
+    text = re.sub(r'Nippon bLife', 'Nippon Life', text) # typo
+    text = re.sub(r'COMSAT.COMSAT', 'COMSAT. COMSAT', text) # missing space at end of sentence
+    #text = re.sub(r'Audio/Video', 'Audio-Video', text) # missing space at end of sentence
+
+    return text.strip()
+
+df['text'] = df['raw_text'].map(clean)
+df['headline'] = df['headline'].map(clean)
+
+print(df[df['raw_text'].map(lambda t: t.isupper())][['headline', 'raw_text']].head(3))
+
+# drop articles with only capital letters
+df = df[df['raw_text'].map(lambda t: not t.isupper())]
+
+# this is our cleaned dataset
+print(df[['headline', 'text']].sample(3, random_state=42))
+#+END_SRC
+* Named Entity Recognition
+
+#+BEGIN_SRC python
+import spacy
+from spacy import displacy
+import matplotlib.pyplot as plt
+
+nlp = spacy.load('en_core_web_sm')
+
+print(*nlp.pipeline, sep='\n')
+
+text = """Hughes Tool Co Chairman W.A. Kistler said its
+merger with Baker International Corp was still under consideration.
+We hope to come soon to a mutual agreement, Kistler said.
+The directors of Baker filed a law suit in Texas to force
+Hughes to complete the merger."""
+
+doc = nlp(text)
+
+print(*[(e.text, e.label_) for e in doc.ents], sep=' ')
+
+displacy.serve(doc, style='ent')
+#+END_SRC
+
+* Blueprint: Using Rule-Based Named-Entity Recognition
+
+#+BEGIN_SRC python
+# pattern match depts of the US govt and the SEC
+from spacy.pipeline import EntityRuler
+
+departments = ['Justice', 'Transportation']
+patterns = [{"label": "GOV",
+             "pattern": [{"TEXT": "U.S.", "OP": "?"},
+                         {"TEXT": "Department"}, {"TEXT": "of"},
+                         {"TEXT": {"IN": departments}, "ENT_TYPE": "ORG"}]},
+             {"label": "GOV",
+              "pattern": [{"TEXT": "U.S.", "OP": "?"},
+                          {"TEXT": {"IN": departments}, "ENT_TYPE": "ORG"},
+                          {"TEXT": "Department"}]},
+             {"label": "GOV",
+              "pattern": [{"TEXT": "Securities"}, {"TEXT": "and"},
+                          {"TEXT": "Exchange"}, {"TEXT": "Commission"}]}]
+
+entity_ruler = EntityRuler(nlp, patterns=patterns, overwrite_ents=True)
+nlp.add_pipe('entity_ruler')
+
+text = """Justice Department is an alias for the U.S. Department of Justice.
+Department of Transportation and the Securities and Exchange Commission
+are government organisations, but the Sales Department is not."""
+
+doc = nlp(text)
+displacy.serve(doc, style='ent')
+#+END_SRC
+
+* Blueprint: Normalizing Named Entities
+
+One approach to simplify the resolution of different entity mentions to a single name is the normalization or standardization of mentions.
+
+#+BEGIN_SRC python
+from spacy.tokens import Span
+from spacy.language import Language
+from spacy.pipeline import merge_entities
+
+text = "Baker International's shares climbed on the New York Stock Exchange."
+
+doc = nlp(text)
+
+print(*[([t.text for t in e], e.label_) for e in doc.ents], sep='\n')
+
+@Language.component('norm_entities')
+def norm_entities(doc):
+    ents = []
+    for ent in doc.ents:
+        if ent[0].pos_ == "DET": # leading article
+            ent = Span(doc, ent.start+1, ent.end, label=ent.label)
+        if len(ent) > 0:
+            if ent[-1].pos_ == "PART": # trailing particle like 's
+                ent = Span(doc, ent.start, ent.end-1, label=ent.label)
+            if len(ent) > 0:
+                ents.append(ent)
+    doc.ents = tuple(ents)
+    return doc
+
+nlp.add_pipe('norm_entities')
+
+doc = nlp(text)
+
+print(*[([t.text for t in e], e.label_) for e in doc.ents], sep='\n')
+
+# merging entity tokens
+nlp.add_pipe('merge_entities')
+
+doc = nlp(text)
+
+print(*[([t.text for t in e], e.label_) for e in doc.ents], sep='\n')
+
+#+END_SRC
+
+* Coreference Resolution
+
+One of the greatest obstacles in information extraction is the fact that entity mentions appear in many different spellings (also called surface forms).
+
+Coreference Resolution is the task of determining the different mentions of an entity within a single text, for example: abbreviated names, aliases, or pronouns.
+The result of this step is a group of coreferencing mentions called a mention cluster.
+
+* Blueprint: Using spaCy's Token Extensions
+
+We need a way to create a link from the different mentions of an entity to the main reference, the referent.
+After coreference resolution, the token for Kistler of the example article should point to (W.A. Kistler, PERSON)
+
+spaCy's extension mechanism allows us to define custom attributes, and this is the perfect way to store this kind of information with tokens.
+
+#+BEGIN_SRC python
+from spacy.tokens import Token
+Token.set_extension('ref_n', default='')  # ref name
+Token.set_extension('ref_t', default='')  # ref type
+
+def init_coref(doc):
+    '''Ensures that each entity mention of type org, gov, person gets an initial reference to itself'''
+    for e in doc.ents:
+        if e.label_ in ['ORG', 'GOV', 'PERSON']:
+            e[0]._._ref_n, e[0]._.ref_t = e.text, e.label_
+    return doc
+#+END_SRC
+
+* Blueprint: Performing Alias Resolution
+
+#+BEGIN_SRC python
+# acronyms created after cooccurrence analysis
+_acronyms = {
+    'AMC': 'American Motors Corp',
+    'AMI': 'American Medical International Inc',
+    'ARCO': 'Atlantic Richfield Co',
+    'BIL': 'Brierley Investments Ltd',
+    'BP': 'British Petroleum Co Plc',
+    'BPI': 'Banco Portugues de Investmento Sarl',
+    'CGCT': 'Cie Generale de Constructions',
+    'DAF': 'Delhi Australia Fund',
+    'EC': 'European Community',
+    'ETL': 'Equiticorp Tasman Ltd',
+    'FCC': 'Federal Communications Commission',
+    'FDA': 'Food and Drug Administration',
+    'FHLBB': 'Federal Home Loan Bank Board',
+    'FIRB': 'Foreign Investment Review Board',
+    'FTC': 'Federal Trade Commission',
+    'ICC': 'Interstate Commerce Commission',
+    'IDC': 'International Digital Communications Planning Inc',
+    'ITJ': 'International Telecom Japan Inc',
+    'KDD': 'Kokusai Denshin Denwa Co Ltd',
+    'PCGG': 'Presidential Commission on Good Government',
+    'PSA': 'Pacific Southwest Airlines',
+    'SMC': 'San Miguel Corp',
+    'TWA': 'Trans World Airlines Inc',
+    'UCPB': 'United Coconut Planters Bank'
+}
+
+# add acronyms (all acronyms are organizations)
+alias_lookup = {acro: (text, 'ORG') for (acro, text) in _acronyms.items()}
+
+alias_lookup['SEC'] = ('Securities and Exchange Commission', 'GOV')
+
+alias_list = {('U.S. Department of Justice', 'GOV'):
+                ['U.S. Department of Justice',
+                 'Department of Justice',
+                 'U.S. Justice Department',
+                 'Justice Department'],
+              ('U.S. Department of Transportation', 'GOV'):
+                ['U.S. Department of Transportation',
+                 'U.S. Transportation Department',
+                 'Department of Transportation',
+                 'Transportation Department',
+                 'DOT'],
+              ('USAir Group Inc', 'ORG'):
+                ['USAir Group Inc', 'USAir Group Inc.',
+                 'US Air Corp', 'US Air Corp.',
+                 'USAir Group', 'USAir Group Inc', 'USAir Group Inc.',
+                 'US Air', 'USAir', 'U.S. Air', 'USAIR Group',
+                 'U.S. Air Group Inc.'],
+              ('Trans World Airlines Inc', 'ORG'):
+                ['Transworld Airlines', 'Transworld Airlines Inc', 'Trans World Airlines'],
+}
+
+# invert alias_list; overwrites entries in acronyms like DOT
+alias_lookup.update({alias: ent for (ent, aliases) in alias_list.items()
+                                for alias in aliases})
+
+for token in ['Transportation Department', 'DOT', 'SEC', 'TWA']:
+    print(token, ':', alias_lookup[token])
+
+@Language.component('alias_resolver')
+def alias_resolver(doc):
+    """lookup aliases and store results in ref_t, ref_n"""
+    for ent in doc.ents:
+        token = ent[0].text
+        if token in alias_lookup:
+            a_name, a_type = alias_lookup[token]
+            ent[0]._.ref_n, ent[0]._.ref_t = a_name, a_type
+    return propagate_ent_type(doc)
+
+
+def propagate_ent_type(doc):
+    """propagate entity type stored in ref_t"""
+    ents = []
+    for e in doc.ents:
+        if e[0]._.ref_n != '':  # if e is a coreference
+            e = Span(doc, e.start, e.end, label=e[0]._.ref_t)
+            ents.append(e)
+    doc.ents = tuple(ents)
+    return doc
+
+nlp.add_pipe('alias_resolver')
+
+def display_ner(doc, include_punct=False):
+    """Generate data frame for visualization of spaCy doc with custom attributes."""
+
+    rows = []
+    for i, t in enumerate(doc):
+        if not t.is_punct or include_punct:
+            row = {'token': i,
+                   'text': t.text, 'lemma': t.lemma_,
+                   'pos': t.pos_, 'dep': t.dep_, 'ent_type': t.ent_type_,
+                   'ent_iob_': t.ent_iob_}
+
+            if doc.has_extension('has_coref'):
+                if doc._.coref_clusters is not None and \
+                   t.has_extension('in_coref') and t._.in_coref: # neuralcoref attributes
+                    row['in_coref'] = t._.in_coref
+                    row['main_coref'] = t._.coref_clusters[0].main.text
+                else:
+                    row['in_coref'] = None
+                    row['main_coref'] = None
+            if t.has_extension('ref_n'): # referent attribute
+                row['ref_n'] = t._.ref_n
+                row['ref_t'] = t._.ref_t
+            if t.has_extension('ref_ent'): # ref_n/ref_t
+                row['ref_ent'] = t._.ref_ent
+            rows.append(row)
+
+    df = pd.DataFrame(rows).set_index('token')
+    df.index.name = None
+
+    return df
+
+text = """
+The deal of Trans World Airlines is under investigation by the
+U.S. Department of Transportation.
+The Transportation Department will block the deal of TWA.
+"""
+
+doc = nlp(text)
+
+print(display_ner(doc).query("ref_n != ''")[['text', 'ent_type', 'ref_n', 'ref_t']])
+#+END_SRC
+
+* Blueprint: Resolving Name Variations
+
+Alias resolution only works if the aliases are known up front.
+
+#+BEGIN_SRC python
+def reset_pipeline(nlp, pipes):
+    # remove all custom pipes
+    custom_pipes = [pipe for (pipe, _) in nlp.pipeline
+                    if pipe not in ['tagger', 'parser', 'ner',
+                                    'tok2vec', 'attribute_ruler', 'lemmatizer']]
+    for pipe in custom_pipes:
+        _ = nlp.remove_pipe(pipe)
+    # re-add specified pipes
+    for pipe in pipes:
+        if 'neuralcoref' == pipe or 'neuralcoref' in str(pipe.__class__):
+            nlp.add_pipe(pipe, name='neural_coref')
+        else:
+            nlp.add_pipe(pipe)
+
+    print(f"Model: {nlp.meta['name']}, Language: {nlp.meta['lang']}")
+    print(*nlp.pipeline, sep='\n')
+
+# reset_pipeline(nlp, ['entity_ruler', 'norm_entities', 'merge_entities', 'init_coref', 'alias_resolver'])
+
+# define a simple rule for name matching: a seconary mention matches a primary mention if all of its words appear in the primary mention in the same order
+def name_match(m1, m2):
+    m2 = re.sub(r'[()\.]', '', m2)  # ignore parens and dots
+    m2 = r'\b' + m2 + r'\b'  # \b marks word boundary
+    m2 = re.sub(r'\s+', r'\\b.*\\b', m2)
+    return re.search(m2, m1, flags=re.I) is not None
+
+
+@Language.component('name_resolver')
+def name_resolver(doc):
+    """create name-based reference to e1 as primary mention of e2"""
+    ents = [e for e in doc.ents if e.label_ in ['ORG', 'PERSON']]
+    for i, e1 in enumerate(ents):
+        for e2 in ents[i+1:]:
+            if name_match(e1[0]._.ref_n, e2[0].text):
+                e2[0]._.ref_n = e1[0]._.ref_n
+                e2[0]._.ref_t = e1[0]._.ref_t
+    return propagate_ent_type(doc)
+
+nlp.add_pipe('name_resolver')
+
+text = """
+Hughes Tool Co Chairman W.A. Kistler said its merger with
+Baker International Corp. was still under consideration.
+We hope to come to a mutual agreement, Kistler said.
+Baker will force Hughes to complete the merger.
+"""
+
+doc = nlp(text)
+
+displacy.serve(doc, style='ent')
+
+print(display_ner(doc))
+#+END_SRC
+
+* Blueprint: Performing Anaphora Resolution with NeuralCoref
+
+Anaphora are words whose interpretation depends on the preceding text. NeuralCoref from huggingface is a library to resolve these kinds of coreferences.
+NeuralCoref is implemented as a pipeline extension for spaCy.
+
+#+BEGIN_SRC python
+from neuralcoref import NeuralCoref
+
+neural_coref = NeuralCoref(nlp.vocab, greedyness=0.45)
+nlp.add_pipe(neural_coref, name='neural_coref')
+
+# AttributeError: type object 'neuralcoref.neuralcoref.array' has no attribute '__reduce_cython__'
+#+END_SRC
+
+#+begin_src python
+import pandas as pd
+
+#+end_src

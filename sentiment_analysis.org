@@ -1,0 +1,372 @@
+#+TITLE: Chapter 11: Performing Sentiment Analysis on Text Data
+
+* Blueprint: Performing Sentiment Analysis Using Lexicon-Based Approaches
+
+#+BEGIN_SRC python
+df = pd.read_json('data/AMAZON_FASHION_5.json', lines=True)
+print(df.iloc[0].T)
+#+END_SRC
+
+First we will use the Bing Liu lexicon:
+
+#+BEGIN_SRC python
+import nltk
+from nltk.corpus import opinion_lexicon
+from nltk.tokenize import word_tokenize
+import sklearn.preprocessing as preprocessing
+
+nltk.download('opinion_lexicon')
+
+print("Total number of words in opinion lexicon:\t", len(opinion_lexicon.words()))
+print("Examples of positive words in opinion lexicon:\t", opinion_lexicon.positive()[:5])
+print("Examples of negative words in opinion lexicon:\t", opinion_lexicon.negative()[:5])
+
+
+# create a dictionary which we can use for scoring our review text
+df.rename(columns={'reviewText': 'text'}, inplace=True)
+pos_score, neg_score = 1, -1
+word_dict = {}
+
+# adding positive words to the dictionary
+for word in opinion_lexicon.positive():
+    word_dict[word] = pos_score
+
+for word in opinion_lexicon.negative():
+    word_dict[word] = neg_score
+
+def bing_liu_score(text):
+    sentiment_score = 0
+    bag_of_words = word_tokenize(str(text).lower())
+    for word in bag_of_words:
+        if word in word_dict:
+            sentiment_score += word_dict[word]
+    return sentiment_score / len(bag_of_words)
+
+df['Bing_Liu_Score'] = df['text'].apply(bing_liu_score)
+print(df[['asin', 'text', 'Bing_Liu_Score']].sample(2))
+
+df['Bing_Liu_Score'] = preprocessing.scale(df['Bing_Liu_Score'])
+print(df.groupby('overall').agg({'Bing_Liu_Score': 'mean'}))
+#+END_SRC
+
+* Supervised Learning Approaches
+
+** Preparing Data
+
+#+BEGIN_SRC python
+df = pd.read_json('data/AMAZON_FASHION_5.json', lines=True)
+
+# assign a [1,0] target class label based on the product rating
+df['sentiment'] = 0
+df.loc[df['overall'] > 3, 'sentiment'] = 1
+df.loc[df['overall'] <= 3, 'sentiment'] = 0
+
+# remove unnecessary columns
+df.drop(columns=['reviewTime', 'unixReviewTime', 'overall', 'reviewerID', 'summary'],
+        inplace=True)
+
+print(df.sample(3).T)
+print(df.iloc[0].T)
+#+END_SRC
+
+* Blueprint: Vectorizing Text Data and Applying Supervised Learning
+
+#+BEGIN_SRC python
+from sklearn.model_selection import train_test_split
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.svm import LinearSVC
+from sklearn.metrics import accuracy_score
+from sklearn.metrics import roc_auc_score
+import re
+
+# data prep
+df.rename(columns={'reviewText': 'text'}, inplace=True)
+
+def clean(text):
+    import html
+    # convert HTML escapes like &amp; to characters
+    text = html.unescape(text)
+
+    # chain of re.subs
+    replacements = [
+        # tags like <tab>, <lb>
+        (r"<[^<>]*>", " "),
+        # markdown URLs like [some text](https://...)
+        (r"\[([^\[\]]*)\]\([^\(\)]*\)", r"\1"),
+        # text or code in brackets like [0]
+        (r"\[[^\[\]]*\]", " "),
+        # standalone sequences of specials, matches &# but not #word
+        (r"(?:^|\s)[&#<>{}\[\]+|\\:-]{1,}(?:\s|$)", " "),
+        # standalone sequences of hyphens like --- or ==
+        (r"(?:^|\s)[\-=\+]{2,}(?:\s|$)", " "),
+        # sequences of white space
+        (r"\s+", " ")
+    ]
+
+    # run through all the replacements
+    for pattern, replacement in replacements:
+        text = re.sub(pattern, replacement, text)
+
+    return text.strip()
+
+
+
+df['text_orig'] = df['text'].copy()
+df['text'] = df['text'].apply(lambda t: clean(str(t)))
+df = df[df['text'].str.len() != 0]
+
+# train test split
+x_train, x_test, y_train, y_test = train_test_split(df['text'], df['sentiment'], test_size=0.2, random_state=42, stratify=df['sentiment'])
+
+print(f"""
+Training Data Size:\t{x_train.shape[0]}
+Testing Data Size:\t{x_test.shape[0]}
+
+Distribution of Classes in Training Data:
+Positive Sentiment:\t{sum(y_train == 1) / len(y_train) * 100.0}
+Negative Sentiment:\t{sum(y_train == 0) / len(y_train) * 100.0}
+
+Distribution of Classes in Testing Data:
+Positive Sentiment:\t{sum(y_test == 1) / len(y_test) * 100.0}
+Negative Sentiment:\t{sum(y_test == 0) / len(y_test) * 100.0}
+""")
+
+# test vectorization
+tfidf = TfidfVectorizer(min_df=10,
+                        ngram_range=(1,1))
+
+x_train_tf = tfidf.fit_transform(x_train)
+x_test_tf = tfidf.transform(x_test)
+
+# training the model
+model1 = LinearSVC(random_state=42, tol=1e-5)
+model1.fit(x_train_tf, y_train)
+
+y_pred = model1.predict(x_test_tf)
+
+print(f"""
+Accuracy:\t{accuracy_score(y_test, y_pred)}
+ROC-AUC:\t{roc_auc_score(y_test, y_pred)}
+""")
+
+# view some results to check
+sample_reviews = df.sample(5)
+sample_reviews_tf = tfidf.transform(sample_reviews['text'])
+sentiment_predictions = model1.predict(sample_reviews_tf)
+sentiment_predictions = pd.DataFrame(data=sentiment_predictions,
+                                     index=sample_reviews.index,
+                                     columns=['sentiment_prediction'])
+sample_reviews = pd.concat([sample_reviews,
+                            sentiment_predictions],
+                           axis=1)
+print('Some sample reviews with their sentiment:')
+print(sample_reviews[['text_orig', 'sentiment_prediction', 'sentiment']])
+
+# compare against Bing-Liu Baseline
+def baseline_scorer(text):
+    score = bing_liu_score(text)
+    if score > 0:
+        return 1
+    else:
+        return 0
+
+y_pred_baseline = x_test.apply(baseline_scorer)
+acc_score = accuracy_score(y_pred_baseline, y_test)
+print(acc_score)
+
+#+END_SRC
+
+* Blueprint: Using Transfer Learning
+
+#+BEGIN_SRC python
+from transformers import BertConfig, BertTokenizer, BertForSequenceClassification, AdamW, get_linear_schedule_with_warmup
+from transformers import DistilBertModel, DistilBertConfig, DistilBertTokenizer
+import torch
+from torch.utils.data import TensorDataset
+from torch.utils.data import DataLoader, RandomSampler
+from tqdm import trange, notebook
+
+# loading the model
+config = BertConfig.from_pretrained('bert-base-uncased',
+                                    finetuning_task='binary')
+tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+model = BertForSequenceClassification.from_pretrained('bert-base-uncased')
+# config = DistilBertConfig()
+# tokenizer = DistilBertTokenizerFast.from_pretrained('distilbert-base-uncased')
+# model = DistilBertModel.from_pretrained('distilbert-base-uncased', config=config)
+
+
+
+def get_tokens(text, tokenizer, max_seq_length, add_special_tokens=True):
+    input_ids = tokenizer.encode(str(text),
+                                 add_special_tokens=add_special_tokens,
+                                 max_length=max_seq_length,
+                                 pad_to_max_length=True)
+    attention_mask = [int(id > 0) for id in input_ids]
+    assert len(input_ids) == max_seq_length
+    assert len(attention_mask) == max_seq_length
+    return input_ids, attention_mask
+
+text = "Here is the sentence that I want embeddings for"
+input_ids, attention_mask = get_tokens(text, tokenizer, 40, True)
+input_tokens = tokenizer.convert_ids_to_tokens(input_ids)
+
+print(f"""
+Text:\t{text}
+Input Tokens:\t{input_tokens}
+Input IDs:\t{input_ids}
+Attention Mask:\t{attention_mask}
+""")
+
+# split
+x_train, x_test, y_train, y_test = train_test_split(df['text_orig'],
+                                                    df['sentiment'],
+                                                    test_size=0.2,
+                                                    random_state=42,
+                                                    stratify=df['sentiment'])
+
+x_train_tokens = x_train.apply(get_tokens, args=(tokenizer, 50))
+x_test_tokens = x_test.apply(get_tokens, args=(tokenizer, 50))
+
+# place in tensors
+input_ids_train = torch.tensor(
+    [features[0] for features in x_train_tokens.values],
+    dtype=torch.long
+)
+input_mask_train = torch.tensor(
+    [features[1] for features in x_train_tokens.values],
+    dtype=torch.long
+)
+label_ids_train = torch.tensor(y_train.values,
+                               dtype=torch.long)
+
+print(f"""
+Input IDs Shape:\t{input_ids_train.shape}
+Input Mask Train:\t{input_mask_train.shape}
+Label IDs Train:\t{label_ids_train.shape}
+""")
+
+train_dataset = TensorDataset(input_ids_train,
+                              input_mask_train,
+                              label_ids_train)
+
+# step 2: model training
+train_batch_size, num_train_epochs = 4, 100
+
+train_sampler = RandomSampler(train_dataset)
+train_dataloader = DataLoader(train_dataset,
+                              sampler=train_sampler,
+                              batch_size=train_batch_size)
+t_total = len(train_dataloader) // num_train_epochs
+
+print(f"""
+Num Examples:\t\t\t{len(train_dataset)}
+Num Epochs:\t\t\t{num_train_epochs}
+Train Batch Size:\t\t{train_batch_size}
+Total Optimization Steps:\t{t_total}
+""")
+
+learning_rate, adam_epsilon, warmup_steps = 1e-4, 1e-8, 0
+
+optimizer = AdamW(model.parameters(),
+                  lr=learning_rate,
+                  eps=adam_epsilon)
+
+scheduler = get_linear_schedule_with_warmup(optimizer,
+                                            num_warmup_steps=warmup_steps,
+                                            num_training_steps=t_total)
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+train_iterator = trange(num_train_epochs, desc="Epoch")
+
+# put model in train mode
+model.train()
+
+for epoch in train_iterator:
+    epoch_iterator = notebook.tqdm(train_dataloader,
+                                   desc="Iteration")
+    for step, batch in enumerate(epoch_iterator):
+        # reset all gradients at start of every iteration
+        model.zero_grad()
+        # put the model and the input observations to GPU
+        model.to(device)
+        batch = tuple(t.to(device) for t in batch)
+
+        # identify inputs to the model
+        inputs = {'input_ids': batch[0],
+                  'attention_mask': batch[1],
+                  'labels': batch[2]}
+
+        # forward pass through the model. Input -> Model -> Output
+        outputs = model(**inputs)
+
+        # determine loss
+        loss = outputs[0]
+        print("\r%f" % loss, end='')
+
+        # backpropagate the loss (calculates gradients)
+        loss.backward()
+
+        # prevent exploding gradients by limiting them to 1.0
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+
+        # update the parameters and learning rate
+        optimizer.step()
+        scheduler.step()
+
+        model.save_pretrained('outputs')
+
+# step 3: model evaluation
+# del model
+# torch.cuda.empty_cache()
+import numpy as np
+from torch.utils.data import SequentialSampler
+
+test_batch_ = 64
+test_sampler = SequentialSampler(test_dataset)
+test_dataloader = DataLoader(test_dataset,
+                             sampler=test_sampler,
+                             batch_size=test_batch_size)
+
+# load the pretrained model that was saved earlier
+model = model.from_pretrained('/outputs')
+
+# initialize the prediction and actual labels
+preds = None
+out_label_ids = None
+
+# put model in eval mode
+model.eval()
+
+for batch in notebook.tqdm(test_dataloader,
+                           desc="Evaluating"):
+    # put the model and the input observations to GPU
+    model.to(device)
+    batch = tuple(t.to(device) for t in batch)
+
+    # Do not track any gradients since we are in eval model
+    with torch.no_grad():
+        inputs = {'input_ids': batch[0],
+                  'attention_mask': batch[1],
+                  'labels': batch[2]
+        }
+
+        # forward pass through the model
+        outputs = model(**inputs)
+
+        # we get loss since we provided the labels
+        tmp_eval_loss, logits = outputs[:2]
+
+        # there may be more than one batch of items in the test dataset
+        if preds is None:
+            preds = logits.detach().cpu().numpy()
+            out_label_ids = inputs['labels'].detach().cpu().numpy()
+        else:
+            preds = np.append(preds, logits.detach().cpu().numpy(), axis=0)
+            out_label_ids = np.append(out_label_ids, inputs['labels'].detach().cpu().numpy(), axis=0)
+
+        # get final loss, predictions, and accuracy
+        preds = np.argmax(preds, axis=1)
+        acc_score = accuracy_score(preds, out_label_ids)
+        print('Accuracy:\t', acc_score)
+#+END_SRC

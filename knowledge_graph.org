@@ -361,19 +361,109 @@ print(display_ner(doc))
 
 * Blueprint: Performing Anaphora Resolution with NeuralCoref
 
-Anaphora are words whose interpretation depends on the preceding text. NeuralCoref from huggingface is a library to resolve these kinds of coreferences.
-NeuralCoref is implemented as a pipeline extension for spaCy.
+In linguistics, /anaphora/ are words whose interpretation depends on the preceding text.
 
-#+BEGIN_SRC python
+NeuralCoref from huggingface is a library for resolving these kinds of coreferences.
+The algorithm uses feature vectors on word embeddings in combination with two neural networks to identify coreference clusters and their main mentions.
+
+#+begin_src python
+import spacy
+spacy.prefer_gpu()
+nlp = spacy.load("en_core_web_sm")
+
 from neuralcoref import NeuralCoref
 
 neural_coref = NeuralCoref(nlp.vocab, greedyness=0.45)
 nlp.add_pipe(neural_coref, name='neural_coref')
 
-# AttributeError: type object 'neuralcoref.neuralcoref.array' has no attribute '__reduce_cython__'
-#+END_SRC
+doc = nlp(text)
+print(*doc._.coref_clusters, sep='\n')
+
+def anaphor_coref(doc):
+    """anaphora resolution"""
+    for token in doc:
+        # if token is coref and not already dereferenced
+        if token._.in_coref and token._.ref_n == '':
+            ref_span = token._.coref_clusters[0].main  # get referred span
+            if len(ref_span) <= 3:  # consider only short spans
+                for ref in ref_span:  # find first dereferenced entity
+                    if ref._.ref_n != '':
+                        token._.ref_n = ref._.ref_n
+                        token._.ref_t = ref._.ref_t
+                        break
+    return doc
+
+# add resolved to pipeline and check result
+nlp.add_pipe(anaphor_coref)
+doc = nlp(text)
+display_ner(doc).query("main_coref != ''")
+#+end_src
+
+* Blueprint: Name Normalization
+
+Even though our name resolution unifies company mentions within an article, the company names are still inconsistent across articles. We can harmonize company mentions by removing the legal suffixes like Co. or Inc. from company names.
 
 #+begin_src python
-import pandas as pd
+def strip_legal_suffix(text):
+    return re.sub(r'(\s+and)?(\s+|\b(Co|Corp|Inc|Plc|Ltd)\b\.?)*$',
+                  '', text)
 
+print(strip_legal_suffix('Hughes Tool Co'))
+
+def norm_names(doc):
+    for t in doc:
+        if t._.ref_n != '' and t._.ref_t in ['ORG']:
+            t._.ref_n = strip_legal_suffix(t._.ref_n)
+            if t._.ref_n == '':
+                t._.ref_t = ''
+    return doc
+
+nlp.add_pipe(norm_names)
 #+end_src
+
+* Blueprint: Creating a Co-Occurence Graph
+
+A co-occurence graph is the simplest form of a knowledge graph. The nodes in the graph are entities, e.g. organizations. Two entities share an (undirected) edge if they are mentioned in the same context (e.g. a paragraph or sentence).
+
+** Extracting Co-Occurences from a Document
+
+   #+begin_src python
+from itertools import combinations
+
+def extract_coocs(doc, include_types):
+    ents = set([(e[0]._.ref_n, e[0]._.ref_t)
+                for e in doc.ents if e[0]._.ref_t
+                in include_types])
+    yield from combinations(sorted(ents), 2)
+
+# use spacy streaming by calling nlp.pipe
+batch_size = 100
+coocs = []
+for i in range(0, len(df), batch_size):
+    docs = nlp.pipe(df['text'][i:i+batch_size],
+                    disable=['neural_coref',
+                             'anaphor_coref'])
+    for j, doc in enumerate(docs):
+        coocs.extend([(df.index[i+j], *c)
+                      for c in extract_coocs(doc, ['ORG', 'GOV'])])
+
+print(*coocs[:3], sep='\n')
+
+coocs = [([id], *e1, *e2) for (id. e1, e2) in coocs]
+cooc_df = pd.DataFrame.from_records(coocs,
+                                    columns=('article_id', 'ent1', 'type1', 'ent2', 'type2'))
+cooc_df = (cooc_df
+           .groupby(['ent1', 'type1', 'ent2', 'type2'])
+           ['article_id']
+           .agg(['count', 'sum'])
+           .rename(columns={'count': 'freq',
+                            'sum': 'articles'})
+           .reset_index()
+           .sort_values('freq', ascending=False))
+cooc_df['articles'] = cooc_df['articles'].map(lambda lst: ','.join([str(a) for a in lst[:5]]))
+
+# 3 most frequent entity pairs found in the corpus
+cooc_df.head(3)
+   #+end_src
+
+** Visualizing the Graph with Gephi

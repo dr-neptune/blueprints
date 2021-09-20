@@ -1,1 +1,121 @@
 #+TITLE: Chapter 13: Using Text Analytics in Production
+
+* Blueprint: Using Conda to Create Reproducible Python Environments
+
+  #+begin_src shell
+    conda create -n env_name [list-of-packages]
+    conda activate env_name
+    # view all the environments
+    conda env list
+    # delete an environment
+    conda remove --name env_name --all
+    # export as a YAML file
+    conda env export > environment.yml
+  #+end_src
+
+* Blueprint: Using Containers to Create Reproducible Environments
+
+  #+begin_src shell
+    sudo docker run hello-world
+
+    # search for containers
+    sudo docker search miniconda
+  #+end_src
+
+We can start with a base container using miniconda3.
+
+#+begin_src docker :tangle example_dockerfile
+FROM continuumio/miniconda3
+
+# add environment.yml to build context and create the environment
+ARG conda_env=blueprints
+ADD environment.yml /tmp/environment.yml
+RUN conda env create -f /tmp/environment.yml
+
+# activating the environment and starting a jupyter notebook
+RUN echo "source activate ${conda_env}" > ~/.bashrc
+ENV PATH /opt/conda/envs/${conda_env}/bin:$PATH
+
+# start the jupyter notebook on the server
+EXPOSE 8888
+ENTRYPOINT ["jupyter","notebook","--ip=0.0.0.0","--port=8888","--allow-root","--no-browser"]
+#+end_src
+
+The PATH argument specifies where to find the files for the "context" of the build on the Docker daemon.
+All the files in this directory are packaged with tar and sent to the daemon during the build process.
+This must contain all the files required from the build environment (like environment.yml)
+
+#+begin_src shell
+docker build -t username/docker_project -f Dockerfile [PATH]
+#+end_src
+
+Afterwards, we can check if the image was built correctly using
+
+#+begin_src shell
+sudo docker images
+#+end_src
+
+and we can create a running instance of this environment by running
+
+#+begin_src shell
+  sudo docker run -p host_port:container_port username/docker_project:tag_name
+
+  # concrete example
+  sudo docker run -p 5000:8888 -v /home/user/text-blueprints/ch13/:/work textblueprints/ch13:v1
+
+  # check the status of all running containers
+  sudo docker container ps
+
+#+end_src
+
+* Blueprint: Creating a REST API for your Text Analytics Model
+
+We will make use of the following 3 components to host our rest api:
+
+- FastAPI: a fast web framework for building APIs
+- Gunicorn: A web service gateway interface server that handles all incoming requests
+- Docker: Extending the docker container that we used in the previous blueprint
+
+Below will be our file directory:
+
+#+DOWNLOADED: screenshot @ 2021-09-20 08:58:03
+[[file:Blueprint:_Creating_a_REST_API_for_your_Text_Analytics_Model/2021-09-20_08-58-03_screenshot.png]]
+
+#+begin_src python
+import preprocess
+import vectorizer
+import prediction_model
+
+from fastapi import FastAPI
+
+class Sentiment(Enum):
+    POSITIVE = 1
+    NEGATIVE = 0
+
+class Review(BaseModel):
+    text: str
+    reviewerID: Optional[str] = None
+    asin: Optional[str] = None
+    sentiment: Optional[str] = None
+
+    class Config:
+        schema_extra = {'example': {'text': "This was a great purchase, saved me a lot of time!",
+                                    'reviewerID': "A1VU337W6PKAR3",
+                                    'productID': "B00K0TIC56"}}
+
+
+
+@app.post("/api/v1/sentiment", response_model=Review)
+def predict(review: Review, model = Depends(load_model())):
+    text_clean = preprocessing.clean(review.txt)
+    text_tfidf = vectorizer.transform([text_clean])
+    sentiment = prediction_model.predict(text_tfidf)
+    review.sentiment = Sentiment(sentiment.item()).name
+    return review
+
+
+
+
+
+app = FastAPI()
+#+end_src

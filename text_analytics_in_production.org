@@ -203,3 +203,5 @@ print(r.text)
 Check the book, or just read a guide on deploying a docker container to a cloud hosted kubernetes service. The book used google cloud with gcloud sdk.
 
 * Blueprint: Automatically Versioning and Deploying Builds
+
+Talks about using github actions to hook into the kubernetes cluster to rebuild the sentiment app and set it up in the kubecluster

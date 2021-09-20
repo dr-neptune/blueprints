@@ -85,6 +85,8 @@ Below will be our file directory:
 import preprocess
 import vectorizer
 import prediction_model
+import pickle
+from typing import Optional
 
 from fastapi import FastAPI
 
@@ -103,6 +105,16 @@ class Review(BaseModel):
                                     'reviewerID': "A1VU337W6PKAR3",
                                     'productID': "B00K0TIC56"}}
 
+def load_model():
+    try:
+        print('Calling Depends Function')
+        global prediction_model, vectorizer
+        prediction_model = pickle.load(open('models/sentiment_classification.pkl', 'rb'))
+        vectorizer = pickle.load(open('models/tfidf_vectorizer.pkl', 'rb'))
+        print('Models have been loaded')
+    except Exception as e:
+        raise ValueError('No model found')
+
 
 
 @app.post("/api/v1/sentiment", response_model=Review)
@@ -113,9 +125,81 @@ def predict(review: Review, model = Depends(load_model())):
     review.sentiment = Sentiment(sentiment.item()).name
     return review
 
-
-
-
-
 app = FastAPI()
 #+end_src
+
+FastAPI can be run with any web server (like uvicorn), but it is recommended to use a full-fledged Web Service Gateway Interface (WSGI) server, which is prod ready and supports multiple worker threads. We can use gunicorn as our WSGI server, which will provide us with a HTTP server that can receive requests and redirect them to the FastAPI app.
+
+#+begin_src shell
+gunicorn -w 3 -b :5000 -t 5 -k uvicorn.workers.UvicornWorker main:app
+#+end_src
+
+where:
+-w is the number of worker processes to run
+-b is the port that the WSGI server listens on
+-t indicates a timeout value, after which the server will kill and restart the app if it's not responsive
+-k specifies the instance of worker class that must be called to run the app
+
+Before we deploy, we should check our environment for unused packages. We can use a python code analysis tool called Vulture that identifies unused packages and other dead code fragments.
+
+We can also determine the version of each package used in the coda environment by running *conda list* and then use the information there to create a final cleaned-up environment YAML file.
+We can then dockerize the API so that it's easier to run the entire app in its own container. We just need to make 2 small changes:
+
+#+begin_src docker :tangle example_dockerfile_api
+FROM continuumio/miniconda3
+
+# add environment.yml to build context and create the environment
+ARG conda_env=blueprints
+ADD environment.yml /tmp/environment.yml
+RUN conda env create -f /tmp/environment.yml
+
+# activating the environment and starting a jupyter notebook
+RUN echo "source activate ${conda_env}" > ~/.bashrc
+ENV PATH /opt/conda/envs/${conda_env}/bin:$PATH
+
+# copy the files required for deploying service to app folder in container
+COPY . /app
+WORKDIR /app
+
+# start the WSGI server on the container
+EXPOSE 5000
+RUN ["chmod", "+x", "start_script.sh"]
+ENTRYPOINT ["/bin/bash", "-c"]
+CMD ["./start_script.sh"]
+#+end_src
+
+#+begin_src shell :tangle start_script.sh
+  #!bin/bash
+  source activate my_env_name
+  GUNICORN_CMD_ARGS="--access-logfile -" gunicorn -w 3 -b :5000 -t 5 -k uvicorn.workers.UvicornWorker main:app -
+#+end_src
+
+We can then build the docker image and run it. This will result in a running Docker container where the Gunicorn WSGI server is running the FastAPI app.
+
+#+begin_src shell
+sudo docker run -p 5000:5000 textblueprints/sentiment-app:v1
+#+end_src
+
+We can make a call to the container running the API from a different program.
+
+#+begin_src python
+import requests
+import json
+
+url = 'http://0.0.0.0:5000/api/v1/sentiment'
+data = {'text': 'I could not ask for a better system for my small greenhouse, easy to set up and nozzles do very well',
+        'reviewerID': 'A1VU337W6PKAR3',
+        'productID': 'B00K0TIC56'}
+
+input_data = json.dumps(data)
+headers = {'content-type': 'application/json',
+           'Accept-Charset': 'UTF-8'}
+r = requests.post(url, data=input_data, headers=headers)
+print(r.text)
+#+end_src
+
+* Blueprint: Deploying and Scaling Your API Using a Cloud Provider
+
+Check the book, or just read a guide on deploying a docker container to a cloud hosted kubernetes service. The book used google cloud with gcloud sdk.
+
+* Blueprint: Automatically Versioning and Deploying Builds

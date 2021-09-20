@@ -467,3 +467,154 @@ cooc_df.head(3)
    #+end_src
 
 ** Visualizing the Graph with Gephi
+
+We will use Gephi because it is interactive. In order to get the data in the format required for Gephi, we first use networkx to save the list of nodes and edges of the graph in Graph Exchange XML format.
+
+   #+begin_src python
+import networkx as nx
+
+graph = nx.from_pandas_edgelist(cooc_df[['ent1', 'ent2', 'articles', 'freq']]
+                                .query('freq > 3')
+                                .rename(columns={'freq': 'weight'}),
+                                source='ent1', target='ent2', edge_attr=True)
+
+nx.readwrite.write_gexf(graph, 'cooc.gexf', encoding='utf-8', prettyprint=True, version='1.2draft')
+   #+end_src
+
+* Relation Extraction
+
+In this section, we look at 2 different blueprints for pattern-based relation extraction.
+
+The first (and simpler) blueprint searches for token phrases of the form "subject-predicate-object"
+The second uses the syntactical structure of a sentence, the dependency tree, to get more precise results at the price of more complex rules.
+
+In the end, we will generate a knowledge graph based on the four relations: acquires, sells, subsidiary-of, chairperson-of
+
+* Blueprint: Extracting Relations Using Phrase Matching
+
+The first blueprint works like rule-based entity recognition: it tries to identify relations based on patterns for token sequences.
+
+Not working here, check the docs or a different tutorial
+
+  #+begin_src python
+from spacy.matcher import Matcher
+
+matcher = Matcher(nlp.vocab)
+
+acq_synonyms = ['acquire', 'buy', 'purchase']
+
+pattern = [{'_': {'ref_t': 'ORG'}}, # subject
+           {'_': {'ref_t': {'NOT_IN': ['ORG']}}, 'OP': '*'},
+           {'POS': 'VERB', 'LEMMA': {'IN': acq_synonyms}},
+           {'_': {'ref_t': {'NOT_IN': ['ORG']}}, 'OP': '*'},
+           {'_': {'ref_t': 'ORG'}}] # object
+
+matcher.add('acquires', None, pattern)
+
+subs_synonyms = ['subsidiary', 'unit']
+
+pattern = [{'_': {'ref_t': 'ORG'}}, # subject
+           {'_': {'ref_t': {'NOT_IN': ['ORG']}},
+            'POS': {'NOT_IN': ['VERB']}, 'OP': '*'},
+           {'LOWER': {'IN': subs_synonyms}}, {'TEXT': 'of'},
+           {'_': {'ref_t': {'NOT_IN': ['ORG']}},
+            'POS': {'NOT_IN': ['VERB']}, 'OP': '*'},
+           {'_': {'ref_t': 'ORG'}}] # object
+
+matcher.add('subsidiary-of', None, pattern)
+
+text = """
+Fujitsu plans to acquire 80% of Fairchild Corp, an industrial unit of Schlumberger.
+"""
+
+def extract_rel_match(doc, matcher):
+    for sent in doc.sents:
+        for match_id, start, end in matcher(sent):
+            span = sent[start:end]
+            pred = nlp.vocab.strings[match_id]
+            subj, obj = span[0], span[-1]
+            if pred.startswith('rev-'):  # reversed relation
+                subj, obj = obj, subj
+                pred = pred[4:]
+            yield ((subj._.ref_n, subj._.ref_t), pred,
+                   (obj._.ref_n, obj._.ref_t))
+
+pattern = [{'_': {'ref_t': 'ORG'}}, # subject
+           {'LOWER': {'IN': subs_synonyms}}, # predicate
+           {'_': {'ref_t': 'ORG'}}] # object
+
+matcher.add('rev-subsidiary-of', None, pattern)
+
+doc = nlp(text)
+
+print(*extract_rel_match(doc, matcher), sep='\n')
+  #+end_src
+
+* Blueprint: Extracting Relations Using Dependency Trees
+
+Not working here, check the docs or a different tutorial
+
+  #+begin_src python
+text = "Fujitsu, a competitor of NEC, acquired Fairchild Corp."
+
+doc = nlp(text)
+
+displacy.serve(doc, style='dep', options={'compact': False,
+                                          'distance': 100})
+
+def extract_rel_dep(doc, pred_name, pred_synonyms, excl_prepos=[]):
+    for token in doc:
+        if token.pos_ == 'VERB' and token.lemma_ in pred_synonyms:
+            pred = token
+            passive = is_passive(pred)
+            subj = find_subj(pred, 'ORG', passive)
+            if subj is not None:
+                obj = find_obj(pred, 'ORG', excl_prepos)
+                if obj is not None:
+                    if passive: # switch roles
+                        obj, subj = subj, obj
+                    yield ((subj._.ref_n, subj._.ref_t),
+                           pred_name, (obj._.ref_n, obj._.ref_t))
+  #+end_src
+
+* Creating the Knowledge Graph
+
+Now we can put everything together and create a knowledge graph from our entire corpus.
+We can extract organizations, persons, and "acquires", "sells", "subsidiary-of", "executive-of"
+
+  #+begin_src python
+nlp = spacy.load('en_core_web_lg')
+
+# add pipes
+pipes = [entity_ruler, norm_entities, merge_entities,
+         init_coref, alias_resolver, name_resolver,
+         neural_coref, anaphor_coref, norm_names]
+
+for pipe in pipes:
+    nlp.add_pipe(pipe)
+
+# add 2 additional rules for "executive-of" and "subsidiary-of"
+ceo_synonyms = ['chairman', 'president', 'director', 'ceo', 'executive']
+
+pattern = [{'ENT_TYPE': 'PERSON'},
+           {'ENT_TYPE': {'NOT_IN': ['ORG', 'PERSON']}, 'OP': '*'},
+           {'LOWER': {'IN': ceo_synonyms}}, {'TEXT': 'of'},
+           {'ENT_TYPE': {'NOT_IN': ['ORG', 'PERSON']}, 'OP': '*'},
+           {'ENT_TYPE': 'ORG'}]
+
+matcher.add('executive-of', None, pattern)
+
+pattern = [{'ENT_TYPE': 'ORG'},
+           {'LOWER': {'IN': ceo_synonyms}},
+           {'ENT_TYPE': 'PERSON'}]
+
+matcher.add('rev-executive-of', None, pattern)
+
+# define one function to extract all relationships
+def extract_rels(doc):
+    yield from extract_rel_match(doc, matcher)
+    yield from extract_rel_dep(doc, 'acquires', acq_synonyms, ['to', 'from'])
+    yield from extract_rel_dep(doc, 'sells', ['sell'], ['to', 'from'])
+
+# extract the relations, convert them into a networkx graph, store the graph in a gexf file for Gephi
+  #+end_src
